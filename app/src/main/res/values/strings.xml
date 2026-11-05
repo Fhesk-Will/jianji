@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">简记</string>
+    <string name="widget_label">简记 · 快捷记账</string>
+    <string name="widget_desc">本月收支一览，点按直接记一笔</string>
+</resources>
