@@ -62,7 +62,7 @@ app/src/main/java/com/jianji/app/
      命令行党可先 `gradle wrapper --gradle-version 8.7` 生成 wrapper。
 2. Run ▶ 到设备 / 模拟器（minSdk 26）。
 3. 发布版（R8 裁剪，约 2MB）：`./gradlew assembleRelease`
-   - 需 `jianji-release.jks` + `keystore.properties`（随源码交付，密码 `jianji2026app`）
+   - 需自备 `jianji-release.jks` + `keystore.properties`（均不入库，请本地妥善保管）
    - 两个文件已列入 .gitignore，自建仓库时注意保管
    - 无 keystore.properties 时自动回退 debug 签名，不影响他人构建
 
@@ -70,7 +70,7 @@ app/src/main/java/com/jianji/app/
 
 - v0.1.1（2026-11-04）：**记账手感优化**——去掉 Navigation Compose 默认 700ms 淡入淡出：
   底部 Tab 零动画瞬切；记一笔页底部快速上滑 200ms / 返回 160ms；二级页右滑 220ms。
-  出 release 瘦身版（2.1MB），签名密钥随源码交付。
+  出 release 瘦身版（2.1MB），签名密钥不入库、需本地自备。
 - v0.1.0：首版骨架闭环（算式求值、备份、小部件、应用锁、深色主题）。
 
 ## 已实现（骨架闭环）
