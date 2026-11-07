@@ -2,8 +2,6 @@ package com.jianji.app.util
 
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 object Dates {
 
@@ -34,20 +32,4 @@ object Dates {
     fun toUtcMillis(d: LocalDate): Long = d.toEpochDay() * 86_400_000L
 
     fun fromUtcMillis(ms: Long): LocalDate = LocalDate.ofEpochDay(ms / 86_400_000L)
-
-    private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
-
-    /** 设置页展示："今天 07:00" / "昨天 22:10" / "10月3日 07:00" */
-    fun backupTimeLabel(ms: Long, nowMs: Long = System.currentTimeMillis()): String {
-        if (ms <= 0) return "尚未备份"
-        val zone = ZoneId.systemDefault()
-        val d = java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
-        val n = java.time.Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
-        val time = java.time.Instant.ofEpochMilli(ms).atZone(zone).format(timeFmt)
-        return when {
-            d == n -> "今天 $time"
-            d == n.minusDays(1) -> "昨天 $time"
-            else -> "${d.monthValue}月${d.dayOfMonth}日 $time"
-        }
-    }
 }

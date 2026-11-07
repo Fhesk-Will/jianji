@@ -182,17 +182,9 @@ class LedgerRepository(private val db: AppDatabase) {
         }
     }
 
-    // ---------- 备份 / 导出 ----------
-
-    suspend fun snapshotRecords(): List<RecordEntity> = recordDao.snapshot()
-
-    suspend fun snapshotCategories(): List<CategoryEntity> = categoryDao.snapshot()
-
-    /** 幂等合并（按主键 REPLACE），同步层可直接复用同一入口 */
-    suspend fun mergeSnapshot(categories: List<CategoryEntity>, records: List<RecordEntity>) {
-        categoryDao.upsertAll(categories)
-        recordDao.upsertAll(records)
-    }
+    // ---------- 导出 / 导入 ----------
 
     suspend fun csvRows(fromDay: Int, toDay: Int) = recordDao.csvRows(fromDay, toDay)
+
+    suspend fun snapshotCategories(): List<CategoryEntity> = categoryDao.snapshot()
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅暴露缓存目录下的导出文件（CSV 分享用），不包含备份与数据库 -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>
