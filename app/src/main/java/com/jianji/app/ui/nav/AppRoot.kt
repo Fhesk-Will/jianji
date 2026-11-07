@@ -47,6 +47,7 @@ fun AppRoot(
     onOpenRecordConsumed: () -> Unit = {},
     incomingImportUri: Uri? = null,
     onIncomingImportConsumed: () -> Unit = {},
+    onPickImportFile: () -> Unit = {},
 ) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -124,6 +125,7 @@ fun AppRoot(
                     onCategories = { nav.navigate(Routes.CATEGORIES) },
                     incomingImportUri = incomingImportUri,
                     onIncomingImportConsumed = onIncomingImportConsumed,
+                    onPickImportFile = onPickImportFile,
                 )
             }
             composable(

@@ -4,15 +4,18 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.runtime.mutableStateOf
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.jianji.app.data.csv.XlsxTemplate
 import com.jianji.app.ui.lock.LockGate
 import com.jianji.app.ui.nav.AppRoot
 import com.jianji.app.ui.theme.JianJiTheme
@@ -71,6 +74,7 @@ class MainActivity : FragmentActivity() {
                         onOpenRecordConsumed = { openRecordRequest.value = false },
                         incomingImportUri = incomingImportUri.value,
                         onIncomingImportConsumed = { incomingImportUri.value = null },
+                        onPickImportFile = ::openImportPicker,
                     )
                 }
             }
@@ -86,6 +90,47 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
+    }
+
+    // FragmentActivity 要求请求码只使用低 16 位，不能用 ActivityResultRegistry 的随机请求码
+    @Suppress("DEPRECATION")
+    fun openImportPicker() {
+        val primaryError = runCatching {
+            val intent = ActivityResultContracts.OpenDocument().createIntent(
+                this,
+                arrayOf(
+                    "text/csv",
+                    "text/comma-separated-values",
+                    "text/plain",
+                    "application/vnd.ms-excel",
+                    XlsxTemplate.MIME,
+                ),
+            )
+            startActivityForResult(intent, REQUEST_OPEN_DOCUMENT)
+        }.exceptionOrNull() ?: return
+        Log.w("MainActivity", "系统文档选择器不可用，尝试其他文件应用", primaryError)
+
+        val fallbackError = runCatching {
+            val intent = ActivityResultContracts.GetContent().createIntent(this, "*/*")
+            startActivityForResult(intent, REQUEST_GET_CONTENT)
+        }.exceptionOrNull() ?: return
+        Log.e("MainActivity", "备用文件选择器也不可用", fallbackError)
+        val reason = fallbackError.message?.take(100)?.let { "：$it" } ?: ""
+        Toast.makeText(
+            this,
+            "无法打开文件选择器$reason\n也可在微信中用简记打开文件",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode == RESULT_OK &&
+            (requestCode == REQUEST_OPEN_DOCUMENT || requestCode == REQUEST_GET_CONTENT)
+        ) {
+            data?.data?.let { incomingImportUri.value = it }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -137,5 +182,10 @@ class MainActivity : FragmentActivity() {
             .setDeviceCredentialAllowed(true)   // 无生物识别时回退 PIN/图案
             .build()
         prompt.authenticate(info)
+    }
+
+    companion object {
+        private const val REQUEST_OPEN_DOCUMENT = 4_101
+        private const val REQUEST_GET_CONTENT = 4_102
     }
 }

@@ -6,8 +6,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -197,6 +195,7 @@ fun SettingsScreen(
     onCategories: () -> Unit,
     incomingImportUri: Uri? = null,
     onIncomingImportConsumed: () -> Unit = {},
+    onPickImportFile: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as JianJiApp
@@ -238,13 +237,6 @@ fun SettingsScreen(
 
     LaunchedEffect(incomingImportUri) {
         incomingImportUri?.let { externalFileName = vm.displayName(it) }
-    }
-
-    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(vm::importCsv)
-    }
-    val fallbackImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let(vm::importCsv)
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -347,28 +339,6 @@ fun SettingsScreen(
     }
 
     if (showImportHelp) {
-        fun launchImportPicker() {
-            val primaryError = runCatching {
-                importPicker.launch(
-                    arrayOf(
-                        "text/csv",
-                        "text/comma-separated-values",
-                        "application/vnd.ms-excel",
-                        XlsxTemplate.MIME,
-                    )
-                )
-            }.exceptionOrNull() ?: return
-            Log.w("SettingsScreen", "系统文档选择器不可用，尝试其他文件应用", primaryError)
-            val fallbackError = runCatching { fallbackImportPicker.launch("*/*") }.exceptionOrNull()
-            if (fallbackError != null) {
-                Log.w("SettingsScreen", "无法打开文件选择器", fallbackError)
-                Toast.makeText(
-                    context,
-                    "无法打开文件选择器，请检查系统文件应用是否被停用；也可在微信中用简记打开文件",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
         AlertDialog(
             onDismissRequest = { showImportHelp = false },
             title = { Text("导入账单") },
@@ -404,7 +374,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showImportHelp = false
-                    launchImportPicker()
+                    onPickImportFile()
                 }) { Text("选择文件") }
             },
             dismissButton = {
