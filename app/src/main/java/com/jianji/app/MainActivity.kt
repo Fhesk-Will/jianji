@@ -1,6 +1,8 @@
 package com.jianji.app
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -30,6 +32,7 @@ class MainActivity : FragmentActivity() {
 
     private val locked = mutableStateOf(false)
     private val openRecordRequest = mutableStateOf(false)
+    private val incomingImportUri = mutableStateOf<Uri?>(null)
 
     @Volatile
     private var appLockEnabled = false
@@ -37,7 +40,11 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntent(intent)
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        } else {
+            incomingImportUri.value = savedInstanceState.getString("incoming_import_uri")?.let(Uri::parse)
+        }
 
         val container = (application as JianJiApp).container
 
@@ -62,14 +69,22 @@ class MainActivity : FragmentActivity() {
                     AppRoot(
                         openRecordRequest = openRecordRequest.value,
                         onOpenRecordConsumed = { openRecordRequest.value = false },
+                        incomingImportUri = incomingImportUri.value,
+                        onIncomingImportConsumed = { incomingImportUri.value = null },
                     )
                 }
             }
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("incoming_import_uri", incomingImportUri.value?.toString())
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIntent(intent)
     }
 
@@ -77,6 +92,20 @@ class MainActivity : FragmentActivity() {
         if (intent?.getStringExtra(QuickWidgetProvider.EXTRA_OPEN) == "record") {
             openRecordRequest.value = true
         }
+        val uri = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                val stream = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                stream ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+            }
+            else -> null
+        }
+        if (uri != null) incomingImportUri.value = uri
     }
 
     private fun tryUnlock() {

@@ -47,7 +47,10 @@ class CsvManager(
                         .append(escape(r.note)).append('\n')
                 }
                 file.parentFile?.mkdirs()
-                file.writeText(sb.toString(), Charsets.UTF_8)
+                file.outputStream().buffered().use {
+                    it.write(UTF8_BOM)
+                    it.write(sb.toString().toByteArray(Charsets.UTF_8))
+                }
                 rows.size
             }
         }
@@ -87,19 +90,19 @@ class CsvManager(
 
     // ---------- 导入模板 ----------
 
-    /** 把 .xlsx 模板写到用户通过系统文件保存器选定的位置 */
-    suspend fun saveTemplate(uri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+    /** 生成待分享的 .xlsx 模板 */
+    suspend fun createExcelTemplate(file: File): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val out = context.contentResolver.openOutputStream(uri) ?: error("无法写入所选位置")
-            out.use { XlsxTemplate.write(it) }
+            file.parentFile?.mkdirs()
+            file.outputStream().buffered().use { XlsxTemplate.write(it) }
         }
     }
 
-    /** 把 CSV 模板写到用户选定的位置：UTF-8 带 BOM，表头与导入解析一致 */
-    suspend fun saveCsvTemplate(uri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+    /** 生成待分享的 CSV 模板：UTF-8 带 BOM，表头与导入解析一致 */
+    suspend fun createCsvTemplate(file: File): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val out = context.contentResolver.openOutputStream(uri) ?: error("无法写入所选位置")
-            out.use {
+            file.parentFile?.mkdirs()
+            file.outputStream().buffered().use {
                 it.write(UTF8_BOM)
                 it.write((HEADER + "\n" + TEMPLATE_ROW + "\n").toByteArray(Charsets.UTF_8))
             }

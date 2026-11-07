@@ -1,5 +1,6 @@
 package com.jianji.app.ui.nav
 
+import android.net.Uri
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
@@ -44,6 +45,8 @@ private data class Tab(val route: String, val icon: ImageVector, val label: Stri
 fun AppRoot(
     openRecordRequest: Boolean = false,
     onOpenRecordConsumed: () -> Unit = {},
+    incomingImportUri: Uri? = null,
+    onIncomingImportConsumed: () -> Unit = {},
 ) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -54,6 +57,17 @@ fun AppRoot(
         if (openRecordRequest) {
             nav.navigate(Routes.record())
             onOpenRecordConsumed()
+        }
+    }
+
+    // 微信等应用传入文件 → 进入我的页面，由用户确认后导入
+    LaunchedEffect(incomingImportUri) {
+        if (incomingImportUri != null) {
+            nav.navigate(Routes.SETTINGS) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
         }
     }
 
@@ -106,7 +120,11 @@ fun AppRoot(
                 StatsScreen()
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(onCategories = { nav.navigate(Routes.CATEGORIES) })
+                SettingsScreen(
+                    onCategories = { nav.navigate(Routes.CATEGORIES) },
+                    incomingImportUri = incomingImportUri,
+                    onIncomingImportConsumed = onIncomingImportConsumed,
+                )
             }
             composable(
                 route = Routes.RECORD,

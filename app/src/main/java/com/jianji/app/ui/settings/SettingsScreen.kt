@@ -1,7 +1,10 @@
 package com.jianji.app.ui.settings
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -65,10 +69,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
-import java.time.YearMonth
+import java.time.LocalDate
+
+data class ShareRequest(val uri: Uri, val mimeType: String, val title: String)
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -78,9 +86,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     private val _msg = MutableStateFlow<String?>(null)
     val msg: StateFlow<String?> = _msg.asStateFlow()
 
-    /** 待分享的 CSV URI */
-    private val _shareUri = MutableStateFlow<Uri?>(null)
-    val shareUri: StateFlow<Uri?> = _shareUri.asStateFlow()
+    private val _shareRequest = MutableStateFlow<ShareRequest?>(null)
+    val shareRequest: StateFlow<ShareRequest?> = _shareRequest.asStateFlow()
 
     fun setAppLock(v: Boolean) {
         viewModelScope.launch { container.settings.setAppLock(v) }
@@ -89,15 +96,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     /** 导出 CSV 到缓存并准备分享 */
     fun exportCsv(fromDay: Int, toDay: Int) {
         viewModelScope.launch {
-            val ctx = container.appContext
-            val file = File(File(ctx.cacheDir, "share"), CsvManager.suggestedCsvName())
+            val file = sharedFile(CsvManager.suggestedCsvName())
             container.csv.exportToFile(file, fromDay, toDay)
-                .onSuccess {
-                    _shareUri.value = runCatching {
-                        FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-                    }.getOrNull()
-                    if (_shareUri.value == null) _msg.value = "导出失败：无法生成分享文件"
-                    else _msg.value = "已导出 $it 条记录"
+                .onSuccess { count ->
+                    publishShare(file, CsvManager.CSV_MIME, "导出 CSV", "已导出 $count 条记录", "导出")
                 }
                 .onFailure { _msg.value = "导出失败：${it.message}" }
         }
@@ -119,21 +121,65 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** 模板写入用户选定的保存位置 */
-    fun saveTemplate(uri: Uri) {
+    fun shareExcelTemplate() {
         viewModelScope.launch {
-            container.csv.saveTemplate(uri)
-                .onSuccess { _msg.value = "Excel 模板已保存" }
-                .onFailure { _msg.value = "模板保存失败：${it.message}" }
+            val file = sharedFile(XlsxTemplate.FILE_NAME)
+            container.csv.createExcelTemplate(file)
+                .onSuccess { publishShare(file, XlsxTemplate.MIME, "分享 Excel 模板", null, "模板生成") }
+                .onFailure { _msg.value = "模板生成失败：${it.message}" }
         }
     }
 
-    /** CSV 模板写入用户选定的保存位置 */
-    fun saveCsvTemplate(uri: Uri) {
+    fun shareCsvTemplate() {
         viewModelScope.launch {
-            container.csv.saveCsvTemplate(uri)
-                .onSuccess { _msg.value = "CSV 模板已保存" }
-                .onFailure { _msg.value = "模板保存失败：${it.message}" }
+            val file = sharedFile(CsvManager.CSV_TEMPLATE_NAME)
+            container.csv.createCsvTemplate(file)
+                .onSuccess { publishShare(file, CsvManager.CSV_MIME, "分享 CSV 模板", null, "模板生成") }
+                .onFailure { _msg.value = "模板生成失败：${it.message}" }
+        }
+    }
+
+    /** 外部文件名称只用于导入确认，读取放在后台线程 */
+    suspend fun displayName(uri: Uri): String = withContext(Dispatchers.IO) {
+        runCatching {
+            container.appContext.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index >= 0) cursor.getString(index) else null
+                } else {
+                    null
+                }
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+            ?: "所选文件"
+    }
+
+    private fun sharedFile(name: String): File =
+        File(File(container.appContext.cacheDir, "share"), name)
+
+    private fun publishShare(
+        file: File,
+        mimeType: String,
+        title: String,
+        successMsg: String?,
+        operation: String,
+    ) {
+        val ctx = container.appContext
+        val uri = runCatching {
+            FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+        }.getOrNull()
+        if (uri == null) {
+            _msg.value = "${operation}失败：无法生成分享文件"
+        } else {
+            _shareRequest.value = ShareRequest(uri, mimeType, title)
+            successMsg?.let { _msg.value = it }
         }
     }
 
@@ -142,62 +188,63 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun consumeShare() {
-        _shareUri.value = null
+        _shareRequest.value = null
     }
 }
 
 @Composable
-fun SettingsScreen(onCategories: () -> Unit) {
+fun SettingsScreen(
+    onCategories: () -> Unit,
+    incomingImportUri: Uri? = null,
+    onIncomingImportConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val app = context.applicationContext as JianJiApp
     val vm: SettingsViewModel = viewModel(initializer = { SettingsViewModel(app.container) })
     val settings by vm.ui.collectAsStateWithLifecycle()
     val msg by vm.msg.collectAsStateWithLifecycle()
-    val shareUri by vm.shareUri.collectAsStateWithLifecycle()
+    val shareRequest by vm.shareRequest.collectAsStateWithLifecycle()
 
     LaunchedEffect(msg) {
         msg?.let {
-            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
             vm.consumeMsg()
         }
     }
 
-    // 导出完成后拉起系统分享面板
-    LaunchedEffect(shareUri) {
-        val uri = shareUri ?: return@LaunchedEffect
+    // 导出账单或生成模板后，统一拉起系统分享面板
+    LaunchedEffect(shareRequest) {
+        val share = shareRequest ?: return@LaunchedEffect
         runCatching {
             val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/csv"
-                putExtra(Intent.EXTRA_STREAM, uri)
+                type = share.mimeType
+                putExtra(Intent.EXTRA_STREAM, share.uri)
+                clipData = ClipData.newRawUri(share.title, share.uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(send, "导出 CSV"))
+            context.startActivity(Intent.createChooser(send, share.title))
         }.onFailure {
-            Toast.makeText(context, "没有可用的分享应用", Toast.LENGTH_SHORT).show()
+            Log.w("SettingsScreen", "无法打开分享面板", it)
+            Toast.makeText(context, "没有可用的分享应用", Toast.LENGTH_LONG).show()
         }
         vm.consumeShare()
     }
 
-    // CSV 导出范围：弹窗选择 → 写缓存并分享
     var showExportDialog by remember { mutableStateOf(false) }
-    // 导入前的格式说明
+    var exportStart by remember { mutableStateOf(LocalDate.now().minusYears(1)) }
+    var exportEnd by remember { mutableStateOf(LocalDate.now()) }
     var showImportHelp by remember { mutableStateOf(false) }
+    var externalFileName by remember { mutableStateOf("所选文件") }
+
+    LaunchedEffect(incomingImportUri) {
+        incomingImportUri?.let { externalFileName = vm.displayName(it) }
+    }
 
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::importCsv)
     }
-
-    // 保存导入模板：由用户选位置，取消则什么都不做
-    val templatePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(XlsxTemplate.MIME)
-    ) { uri ->
-        uri?.let(vm::saveTemplate)
-    }
-
-    val csvTemplatePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(CsvManager.CSV_MIME)
-    ) { uri ->
-        uri?.let(vm::saveCsvTemplate)
+    val fallbackImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let(vm::importCsv)
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -217,14 +264,18 @@ fun SettingsScreen(onCategories: () -> Unit) {
             IconRow(
                 icon = Icons.Filled.FileDownload,
                 title = "导入 CSV / Excel",
-                sub = "支持 .xlsx 与 .csv，可先下载模板",
+                sub = "支持 .xlsx 与 .csv，可先分享模板",
                 onClick = { showImportHelp = true },
             )
             IconRow(
                 icon = Icons.Filled.Share,
                 title = "导出 CSV",
-                sub = "可选范围，导出后可直接分享",
-                onClick = { showExportDialog = true },
+                sub = "选择起止日期，导出后可直接分享",
+                onClick = {
+                    exportEnd = LocalDate.now()
+                    exportStart = exportEnd.minusYears(1)
+                    showExportDialog = true
+                },
             )
         }
 
@@ -249,56 +300,73 @@ fun SettingsScreen(onCategories: () -> Unit) {
     }
 
     if (showExportDialog) {
-        val now = YearMonth.now()
-        val options = listOf(
-            "本月" to Dates.monthRange(now),
-            "最近三个月" to (Dates.monthRange(now.minusMonths(2)).first to Dates.monthRange(now).second),
-            "今年" to (Dates.monthRange(YearMonth.of(now.year, 1)).first to Dates.monthRange(YearMonth.of(now.year, 12)).second),
-            "全部" to (0 to 999_999),
-        )
+        fun pickDate(initial: LocalDate, onPicked: (LocalDate) -> Unit) {
+            android.app.DatePickerDialog(
+                context,
+                { _, year, month, day -> onPicked(LocalDate.of(year, month + 1, day)) },
+                initial.year,
+                initial.monthValue - 1,
+                initial.dayOfMonth,
+            ).show()
+        }
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
-            title = { Text("导出范围") },
+            title = { Text("导出账单") },
             text = {
                 Column {
-                    options.forEach { (label, range) ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    showExportDialog = false
-                                    vm.exportCsv(range.first, range.second)
-                                }
-                                .padding(vertical = 12.dp, horizontal = 4.dp),
-                        ) {
-                            Text(
-                                label,
-                                fontSize = 14.5.sp,
-                                color = Ink,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                "${Dates.ofEpochDay(range.first)} ~ ${if (range.second >= 999_999) "至今" else Dates.ofEpochDay(range.second).toString()}",
-                                fontSize = 12.sp,
-                                color = Sub,
-                            )
-                        }
+                    IconRow(
+                        icon = Icons.Filled.DateRange,
+                        title = "开始日期",
+                        sub = exportStart.toString(),
+                        onClick = { pickDate(exportStart) { exportStart = it } },
+                    )
+                    IconRow(
+                        icon = Icons.Filled.DateRange,
+                        title = "结束日期",
+                        sub = exportEnd.toString(),
+                        onClick = { pickDate(exportEnd) { exportEnd = it } },
+                    )
+                    if (exportStart.isAfter(exportEnd)) {
+                        Text("开始日期不能晚于结束日期", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
             confirmButton = {
+                TextButton(
+                    enabled = !exportStart.isAfter(exportEnd),
+                    onClick = {
+                        showExportDialog = false
+                        vm.exportCsv(Dates.epochDay(exportStart), Dates.epochDay(exportEnd))
+                    },
+                ) { Text("导出并分享") }
+            },
+            dismissButton = {
                 TextButton(onClick = { showExportDialog = false }) { Text("取消") }
             },
         )
     }
 
     if (showImportHelp) {
-        fun launchSaf(action: () -> Unit, failMsg: String) {
-            runCatching(action).onFailure {
-                Toast.makeText(context, failMsg, Toast.LENGTH_SHORT).show()
+        fun launchImportPicker() {
+            val primaryError = runCatching {
+                importPicker.launch(
+                    arrayOf(
+                        "text/csv",
+                        "text/comma-separated-values",
+                        "application/vnd.ms-excel",
+                        XlsxTemplate.MIME,
+                    )
+                )
+            }.exceptionOrNull() ?: return
+            Log.w("SettingsScreen", "系统文档选择器不可用，尝试其他文件应用", primaryError)
+            val fallbackError = runCatching { fallbackImportPicker.launch("*/*") }.exceptionOrNull()
+            if (fallbackError != null) {
+                Log.w("SettingsScreen", "无法打开文件选择器", fallbackError)
+                Toast.makeText(
+                    context,
+                    "无法打开文件选择器，请检查系统文件应用是否被停用；也可在微信中用简记打开文件",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
         AlertDialog(
@@ -307,28 +375,28 @@ fun SettingsScreen(onCategories: () -> Unit) {
             text = {
                 Column {
                     Text(
-                        "先下载模板，按模板填写后再选择文件导入。",
+                        "模板可直接分享到微信 / WPS。填写后从这里选择文件，或在微信中选择“用其他应用打开 → 简记”。",
                         fontSize = 13.sp,
                         color = Ink,
                         lineHeight = 21.sp,
                     )
                     Spacer(Modifier.size(4.dp))
                     IconRow(
-                        icon = Icons.Filled.FileDownload,
-                        title = "CSV 模板",
+                        icon = Icons.Filled.Share,
+                        title = "分享 CSV 模板",
                         sub = "文本表格，Excel / WPS 可直接打开",
                         onClick = {
                             showImportHelp = false
-                            launchSaf({ csvTemplatePicker.launch(CsvManager.CSV_TEMPLATE_NAME) }, "无法打开系统文件保存器")
+                            vm.shareCsvTemplate()
                         },
                     )
                     IconRow(
-                        icon = Icons.Filled.FileDownload,
-                        title = "Excel 模板",
+                        icon = Icons.Filled.Share,
+                        title = "分享 Excel 模板",
                         sub = ".xlsx，第一个工作表",
                         onClick = {
                             showImportHelp = false
-                            launchSaf({ templatePicker.launch(XlsxTemplate.FILE_NAME) }, "无法打开系统文件保存器")
+                            vm.shareExcelTemplate()
                         },
                     )
                 }
@@ -336,23 +404,39 @@ fun SettingsScreen(onCategories: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showImportHelp = false
-                    launchSaf(
-                        {
-                            importPicker.launch(
-                                arrayOf(
-                                    "text/csv",
-                                    "text/comma-separated-values",
-                                    "application/vnd.ms-excel",
-                                    XlsxTemplate.MIME,
-                                )
-                            )
-                        },
-                        "无法打开系统文件选择器",
-                    )
+                    launchImportPicker()
                 }) { Text("选择文件") }
             },
             dismissButton = {
                 TextButton(onClick = { showImportHelp = false }) { Text("取消") }
+            },
+        )
+    }
+
+    incomingImportUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = onIncomingImportConsumed,
+            title = { Text("导入外部文件") },
+            text = {
+                Column {
+                    Text(externalFileName, fontSize = 14.sp, color = Ink, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "确认将此文件中的账单导入简记吗？取消不会修改现有数据。",
+                        fontSize = 13.sp,
+                        color = Ink,
+                        lineHeight = 21.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onIncomingImportConsumed()
+                    vm.importCsv(uri)
+                }) { Text("确认导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = onIncomingImportConsumed) { Text("取消") }
             },
         )
     }
