@@ -123,6 +123,13 @@ interface RecordDao {
     )
     suspend fun reassignCategory(from: String, to: String, now: Long)
 
+    /** 删除一级分类时，将其所有子分类的历史记录归入兜底分类 */
+    @Query(
+        "UPDATE records SET categoryId = :to, updatedAtEpochMs = :now " +
+            "WHERE categoryId IN (:from) AND isDeleted = 0",
+    )
+    suspend fun reassignCategories(from: List<String>, to: String, now: Long)
+
     /** 全量快照（含软删除墓碑），用于 JSON 备份 */
     @Query("SELECT * FROM records")
     suspend fun snapshot(): List<RecordEntity>

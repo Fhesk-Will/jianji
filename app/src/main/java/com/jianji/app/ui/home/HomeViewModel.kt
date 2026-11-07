@@ -99,7 +99,7 @@ class HomeViewModel(private val repo: LedgerRepository) : ViewModel() {
             monthExpenseMinor = page.expenseMinor,
             monthIncomeMinor = page.incomeMinor,
             filter = f,
-            categories = page.categories,
+            categories = page.categories.filter { it.parentId != null },
         )
     }
 

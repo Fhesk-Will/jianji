@@ -75,7 +75,9 @@ class CsvManager(
                 error(parsed.firstError ?: "没有可导入的记录")
             }
             val categories = repo.snapshotCategories()
-            val byTypeAndName = categories.associateBy { it.type to it.name }
+            val byTypeAndName = categories
+                .filter { !it.isDeleted && it.parentId != null }
+                .associateBy { it.type to it.name }
             var imported = 0
             parsed.rows.forEach { row ->
                 val categoryId = byTypeAndName[row.type to row.categoryName]?.id

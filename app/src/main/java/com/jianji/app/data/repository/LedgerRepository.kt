@@ -147,7 +147,7 @@ class LedgerRepository(private val db: AppDatabase) {
 
     // ---------- 分类 ----------
 
-    suspend fun addCategory(name: String, emoji: String, type: RecordType) {
+    suspend fun addCategory(name: String, emoji: String, type: RecordType, parentId: String? = null) {
         val now = System.currentTimeMillis()
         categoryDao.upsert(
             CategoryEntity(
@@ -157,6 +157,7 @@ class LedgerRepository(private val db: AppDatabase) {
                 type = type,
                 sortOrder = 999,
                 updatedAtEpochMs = now,
+                parentId = parentId,
             ),
         )
     }
@@ -164,22 +165,31 @@ class LedgerRepository(private val db: AppDatabase) {
     suspend fun renameCategory(id: String, name: String, emoji: String) =
         categoryDao.update(id, name.trim(), emoji, System.currentTimeMillis())
 
-    /** 软删除分类；其历史记录归入同类型的「其他」 */
+    /** 删除一级分类会同时删除其子分类；历史记录归入同类型的「其它」 */
     suspend fun deleteCategory(id: String) {
         val cat = categoryDao.byId(id) ?: return
-        if (cat.id == CategoryEntity.OTHER_EXPENSE || cat.id == CategoryEntity.OTHER_INCOME) return
+        val protectedIds = setOf(
+            CategoryEntity.OTHER_EXPENSE,
+            CategoryEntity.OTHER_INCOME,
+            CategoryEntity.OTHER_EXPENSE_PARENT,
+            CategoryEntity.OTHER_INCOME_PARENT,
+        )
+        if (cat.id in protectedIds) return
+        val ids = if (cat.parentId == null) {
+            listOf(cat.id) + categoryDao.snapshot().filter { it.parentId == cat.id }.map { it.id }
+        } else {
+            listOf(cat.id)
+        }
         val fallback =
             if (cat.type == RecordType.EXPENSE) CategoryEntity.OTHER_EXPENSE else CategoryEntity.OTHER_INCOME
         val now = System.currentTimeMillis()
-        recordDao.reassignCategory(cat.id, fallback, now)
-        categoryDao.softDelete(id, now)
+        recordDao.reassignCategories(ids, fallback, now)
+        categoryDao.softDeleteAll(ids, now)
     }
 
-    /** 首次启动播种预置分类（幂等） */
-    suspend fun seedIfEmpty() {
-        if (categoryDao.snapshot().isEmpty()) {
-            categoryDao.upsertAll(DefaultCategories.list())
-        }
+    /** 启动时幂等补齐预置分类，不覆盖用户改名或恢复已删除分类 */
+    suspend fun seedDefaults() {
+        categoryDao.insertMissing(DefaultCategories.list())
     }
 
     // ---------- 导出 / 导入 ----------

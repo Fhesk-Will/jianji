@@ -23,6 +23,9 @@ interface CategoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(categories: List<CategoryEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMissing(categories: List<CategoryEntity>)
+
     @Query("SELECT * FROM categories WHERE id = :id")
     suspend fun byId(id: String): CategoryEntity?
 
@@ -37,6 +40,9 @@ interface CategoryDao {
 
     @Query("UPDATE categories SET isDeleted = 1, updatedAtEpochMs = :now WHERE id = :id")
     suspend fun softDelete(id: String, now: Long)
+
+    @Query("UPDATE categories SET isDeleted = 1, updatedAtEpochMs = :now WHERE id IN (:ids)")
+    suspend fun softDeleteAll(ids: List<String>, now: Long)
 
     @Query("UPDATE categories SET name = :name, emoji = :emoji, updatedAtEpochMs = :now WHERE id = :id")
     suspend fun update(id: String, name: String, emoji: String, now: Long)

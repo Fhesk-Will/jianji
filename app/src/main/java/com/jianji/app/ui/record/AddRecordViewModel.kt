@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.jianji.app.data.entity.CategoryEntity
 import com.jianji.app.data.model.RecordType
+import com.jianji.app.data.prefs.SettingsStore
 import com.jianji.app.data.repository.LedgerRepository
 import com.jianji.app.util.Dates
 import com.jianji.app.util.Money
@@ -26,6 +27,7 @@ data class AddUiState(
     val date: LocalDate = LocalDate.now(),
     val note: String = "",
     val categories: List<CategoryEntity> = emptyList(),
+    val recentCategoryIds: List<String> = emptyList(),
     /** 金额/分类缺失提示 */
     val error: Boolean = false,
 )
@@ -34,6 +36,7 @@ data class AddUiState(
 @OptIn(ExperimentalCoroutinesApi::class)
 class AddRecordViewModel(
     private val repo: LedgerRepository,
+    private val settingsStore: SettingsStore,
     private val recordId: String?,
 ) : ViewModel() {
 
@@ -43,8 +46,18 @@ class AddRecordViewModel(
     val ui: StateFlow<AddUiState> = combine(
         state,
         state.flatMapLatest { repo.categoriesFlow(it.type) },
-    ) { s, cats -> s.copy(categories = cats) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AddUiState())
+        settingsStore.settings,
+    ) { s, cats, settings ->
+        val leaves = cats.filter { it.parentId != null }
+        val recentIds = settings.recentCategoryIds(s.type)
+        val selectedId = when {
+            s.editing && s.categoryId != null -> s.categoryId
+            s.categoryId != null && leaves.any { it.id == s.categoryId } -> s.categoryId
+            else -> recentIds.firstOrNull { id -> leaves.any { it.id == id } }
+                ?: leaves.firstOrNull()?.id
+        }
+        s.copy(categories = cats, recentCategoryIds = recentIds, categoryId = selectedId)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AddUiState())
 
     init {
         if (recordId != null) {
@@ -77,6 +90,10 @@ class AddRecordViewModel(
         state.value = state.value.copy(amountInput = Money.backspace(state.value.amountInput))
     }
 
+    fun clear() {
+        state.value = state.value.copy(amountInput = "", error = false)
+    }
+
     fun selectCategory(id: String) {
         state.value = state.value.copy(categoryId = id, error = false)
     }
@@ -89,9 +106,8 @@ class AddRecordViewModel(
         state.value = state.value.copy(note = n.take(50))
     }
 
-    /** @param andNew true = 「再记」：保存后清空金额备注，停留本页 */
-    fun save(andNew: Boolean = false) {
-        val s = state.value
+    fun save() {
+        val s = ui.value
         // 算式求值：纯数字或四则表达式均可，非法返回 null
         val amount = Money.evalExprMinor(s.amountInput)
         val cat = s.categoryId
@@ -105,11 +121,8 @@ class AddRecordViewModel(
             } else {
                 repo.addRecord(s.type, amount, cat, s.date, s.note)
             }
-            if (andNew) {
-                state.value = s.copy(amountInput = "", note = "")
-            } else {
-                finished.value = true
-            }
+            settingsStore.recordCategoryUse(s.type, cat)
+            finished.value = true
         }
     }
 

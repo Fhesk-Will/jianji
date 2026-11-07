@@ -37,9 +37,9 @@ class CategoryViewModel(private val repo: LedgerRepository) : ViewModel() {
         tab.value = t
     }
 
-    fun add(name: String, emoji: String) {
+    fun add(name: String, emoji: String, parentId: String? = null) {
         if (name.isBlank()) return
-        viewModelScope.launch { repo.addCategory(name, emoji, tab.value) }
+        viewModelScope.launch { repo.addCategory(name, emoji, tab.value, parentId) }
     }
 
     fun rename(id: String, name: String, emoji: String) {

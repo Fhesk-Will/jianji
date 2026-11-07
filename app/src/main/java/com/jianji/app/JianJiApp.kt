@@ -34,7 +34,7 @@ class JianJiApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         container.scope.launch {
-            container.repo.seedIfEmpty()
+            container.repo.seedDefaults()
         }
         observeForWidget()
     }

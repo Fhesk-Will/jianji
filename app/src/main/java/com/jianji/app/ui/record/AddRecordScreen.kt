@@ -3,6 +3,8 @@ package com.jianji.app.ui.record
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,7 +74,7 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
     val app = LocalContext.current.applicationContext as JianJiApp
     val vm: AddRecordViewModel = viewModel(
         key = recordId ?: "new",
-        initializer = { AddRecordViewModel(app.container.repo, recordId) },
+        initializer = { AddRecordViewModel(app.container.repo, app.container.settings, recordId) },
     )
     val state by vm.ui.collectAsStateWithLifecycle()
     val finished by vm.finished.collectAsStateWithLifecycle()
@@ -182,9 +184,10 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
         // 分类宫格
         CategoryGrid(
             categories = state.categories,
+            recentCategoryIds = state.recentCategoryIds,
             selectedId = state.categoryId,
             onSelect = vm::selectCategory,
-            modifier = Modifier.padding(horizontal = 14.dp),
+            modifier = Modifier.padding(horizontal = 14.dp).weight(1f),
         )
 
         // 日期 + 备注
@@ -203,27 +206,59 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
             )
         }
 
-        Spacer(Modifier.weight(1f))
-
         Keypad(
             onKey = vm::onKey,
             onBackspace = vm::backspace,
-            onSave = { vm.save(false) },
-            onSaveNew = { vm.save(true) },
+            onClear = vm::clear,
+            onSave = vm::save,
         )
     }
 }
 
-// ---------- 分类宫格（非懒加载，数量少） ----------
+// ---------- 两级分类宫格 ----------
 
 @Composable
 private fun CategoryGrid(
     categories: List<CategoryEntity>,
+    recentCategoryIds: List<String>,
     selectedId: String?,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    val parents = categories.filter { it.parentId == null }
+    val leaves = categories.filter { it.parentId != null }
+    val recent = recentCategoryIds.mapNotNull { id -> leaves.firstOrNull { it.id == id } }.take(8)
+
+    Column(
+        modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (recent.isNotEmpty()) {
+            Text("最近使用", fontSize = 13.sp, color = Ink, fontWeight = FontWeight.SemiBold)
+            CategoryRows(recent, selectedId, onSelect)
+        }
+        parents.forEach { parent ->
+            val children = leaves.filter { it.parentId == parent.id }
+            if (children.isNotEmpty()) {
+                Text(
+                    "${parent.emoji} ${parent.name}",
+                    fontSize = 13.sp,
+                    color = Ink,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                CategoryRows(children, selectedId, onSelect)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryRows(
+    categories: List<CategoryEntity>,
+    selectedId: String?,
+    onSelect: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         categories.chunked(4).forEach { rowCats ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 rowCats.forEach { cat ->
@@ -265,7 +300,6 @@ private fun CategoryGrid(
                         )
                     }
                 }
-                // 补齐空位，保持 4 列对齐
                 repeat(4 - rowCats.size) {
                     Spacer(Modifier.weight(1f))
                 }
@@ -305,95 +339,108 @@ private fun DateField(date: LocalDate, onPick: (LocalDate) -> Unit) {
 private fun Keypad(
     onKey: (Char) -> Unit,
     onBackspace: () -> Unit,
+    onClear: () -> Unit,
     onSave: () -> Unit,
-    onSaveNew: () -> Unit,
 ) {
     Column(
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface),
     ) {
-        // 5 列：数字 3 列 + ⌫/. 列 + 运算符列（÷ × ＋ −）
-        listOf(
-            listOf("7", "8", "9", "⌫", "÷"),
-            listOf("4", "5", "6", ".", "×"),
-            listOf("1", "2", "3", "＋", "−"),
-        ).forEach { rowKeys ->
-            Row(Modifier.fillMaxWidth()) {
-                rowKeys.forEach { k ->
-                    val operator = k in listOf("÷", "×", "＋", "−")
-                    when (k) {
-                        "⌫" -> KeyBox(
-                            modifier = Modifier.weight(1f),
-                            height = 58.dp,
-                            onClick = onBackspace,
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Backspace,
-                                contentDescription = "退格（长按清空为二期）",
-                                tint = Sub,
-                            )
-                        }
-                        else -> KeyBox(
-                            modifier = Modifier.weight(1f),
-                            height = 58.dp,
-                            operator = operator,
-                            onClick = {
-                                // 显示符号 -> 求值字符：÷/ ×* ＋+ −-
-                                val emit = when (k) {
-                                    "÷" -> '/'
-                                    "×" -> '*'
-                                    "＋" -> '+'
-                                    "−" -> '-'
-                                    else -> k[0]
-                                }
-                                onKey(emit)
-                            },
-                        ) {
-                            if (k == ".") {
-                                Text(".", fontSize = 21.sp, color = Sub, fontWeight = FontWeight.Medium)
-                            } else if (operator) {
+        Row(Modifier.fillMaxWidth()) {
+            // 左侧四列：数字、小数点与四则运算
+            Column(Modifier.weight(4f)) {
+                listOf(
+                    listOf("7", "8", "9", "÷"),
+                    listOf("4", "5", "6", "×"),
+                    listOf("1", "2", "3", "＋"),
+                ).forEach { rowKeys ->
+                    Row(Modifier.fillMaxWidth()) {
+                        rowKeys.forEach { k ->
+                            val operator = k in listOf("÷", "×", "＋")
+                            KeyBox(
+                                modifier = Modifier.weight(1f),
+                                height = 58.dp,
+                                operator = operator,
+                                onClick = {
+                                    val emit = when (k) {
+                                        "÷" -> '/'
+                                        "×" -> '*'
+                                        "＋" -> '+'
+                                        else -> k[0]
+                                    }
+                                    onKey(emit)
+                                },
+                            ) {
                                 Text(
                                     k,
-                                    fontSize = 19.sp,
-                                    color = PrimaryDeep,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = if (operator) 19.sp else 21.sp,
+                                    color = if (operator) PrimaryDeep else Ink,
+                                    fontWeight = if (operator) FontWeight.SemiBold else FontWeight.Medium,
                                 )
-                            } else {
-                                Text(k, fontSize = 21.sp, color = Ink, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
                 }
+                Row(Modifier.fillMaxWidth()) {
+                    KeyBox(
+                        modifier = Modifier.weight(2f),
+                        height = 62.dp,
+                        onClick = { onKey('0') },
+                    ) {
+                        Text("0", fontSize = 21.sp, color = Ink, fontWeight = FontWeight.Medium)
+                    }
+                    KeyBox(
+                        modifier = Modifier.weight(1f),
+                        height = 62.dp,
+                        onClick = { onKey('.') },
+                    ) {
+                        Text(".", fontSize = 21.sp, color = Sub, fontWeight = FontWeight.Medium)
+                    }
+                    KeyBox(
+                        modifier = Modifier.weight(1f),
+                        height = 62.dp,
+                        operator = true,
+                        onClick = { onKey('-') },
+                    ) {
+                        Text("−", fontSize = 19.sp, color = PrimaryDeep, fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            KeyBox(
-                modifier = Modifier.weight(2f),
-                height = 62.dp,
-                onClick = { onKey('0') },
-            ) {
-                Text("0", fontSize = 21.sp, color = Ink, fontWeight = FontWeight.Medium)
-            }
-            KeyBox(
-                modifier = Modifier.weight(1f),
-                height = 62.dp,
-                onClick = onSaveNew,
-            ) {
-                Text("再记", fontSize = 14.sp, color = Sub, fontWeight = FontWeight.Medium)
-            }
-            KeyBox(
-                modifier = Modifier.weight(2f),
-                height = 62.dp,
-                primary = true,
-                onClick = onSave,
-            ) {
-                Text(
-                    "完成",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Ink,   // 琥珀跳色上用深字，保证对比度
-                )
+
+            // 最右列：退格、清零，确定占两行
+            Column(Modifier.weight(1f)) {
+                KeyBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 58.dp,
+                    onClick = onBackspace,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Backspace,
+                        contentDescription = "退格",
+                        tint = Sub,
+                    )
+                }
+                KeyBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 58.dp,
+                    onClick = onClear,
+                ) {
+                    Text("C", fontSize = 19.sp, color = Sub, fontWeight = FontWeight.SemiBold)
+                }
+                KeyBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 120.dp,
+                    primary = true,
+                    onClick = onSave,
+                ) {
+                    Text(
+                        "确定",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Ink,   // 琥珀跳色上用深字，保证对比度
+                    )
+                }
             }
         }
     }

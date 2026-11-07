@@ -11,7 +11,7 @@ import com.jianji.app.data.model.RecordType
  */
 @Entity(
     tableName = "categories",
-    indices = [Index("type"), Index("updatedAtEpochMs")],
+    indices = [Index("type"), Index("updatedAtEpochMs"), Index("parentId")],
 )
 data class CategoryEntity(
     @PrimaryKey val id: String,
@@ -21,10 +21,14 @@ data class CategoryEntity(
     val sortOrder: Int,
     val updatedAtEpochMs: Long,
     val isDeleted: Boolean = false,
+    /** null = 一级分类；否则为所属一级分类 id，记账记录关联二级分类 */
+    val parentId: String? = null,
 ) {
     companion object {
-        /** 「其他」兜底分类：删除分类时历史记录归入这里 */
-        const val OTHER_EXPENSE = "cat-expense-other"
-        const val OTHER_INCOME = "cat-income-other"
+        /** 删除分类时历史记录归入同类型的「其它」二级分类 */
+        const val OTHER_EXPENSE_PARENT = "cat-expense-other-group"
+        const val OTHER_INCOME_PARENT = "cat-income-other-group"
+        const val OTHER_EXPENSE = "cat-expense-other-misc"
+        const val OTHER_INCOME = "cat-income-other-misc"
     }
 }

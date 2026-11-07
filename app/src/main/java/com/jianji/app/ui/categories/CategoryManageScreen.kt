@@ -67,8 +67,9 @@ fun CategoryManageScreen(onBack: () -> Unit) {
     val vm: CategoryViewModel = viewModel(initializer = { CategoryViewModel(app.container.repo) })
     val state by vm.ui.collectAsStateWithLifecycle()
 
-    // null = 关闭；非 null = 编辑该分类（CategoryEntity(id="") 表示新增）
+    // null = 关闭；id 为空表示新增，parentId 区分一级/二级分类。
     var editing by remember { mutableStateOf<CategoryEntity?>(null) }
+    val parents = state.categories.filter { it.parentId == null }
 
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
@@ -83,7 +84,7 @@ fun CategoryManageScreen(onBack: () -> Unit) {
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = { editing = CategoryEntity("", "", "✨", state.tab, 0, 0) }) {
-                Icon(Icons.Filled.Add, contentDescription = "新增分类")
+                Icon(Icons.Filled.Add, contentDescription = "新增一级分类")
             }
         }
 
@@ -101,37 +102,69 @@ fun CategoryManageScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column {
-                        state.categories.forEach { cat ->
+            parents.forEach { parent ->
+                val children = state.categories.filter { it.parentId == parent.id }
+                item(key = parent.id) {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { editing = cat }
-                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                    .clickable { editing = parent }
+                                    .padding(start = 14.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
                             ) {
-                                EmojiBadge(cat.emoji, size = 34.dp)
+                                EmojiBadge(parent.emoji, size = 36.dp)
                                 Column(Modifier.padding(start = 12.dp)) {
-                                    Text(cat.name, fontSize = 14.sp, color = Ink, fontWeight = FontWeight.Medium)
+                                    Text(parent.name, fontSize = 15.sp, color = Ink, fontWeight = FontWeight.Bold)
+                                    val count = (listOf(parent) + children).sumOf { state.counts[it.id] ?: 0 }
                                     Text(
-                                        "${state.counts[cat.id] ?: 0} 条记录",
+                                        "${children.size} 个二级分类 · $count 条记录",
                                         fontSize = 11.sp,
                                         color = Sub,
                                     )
                                 }
                                 Spacer(Modifier.weight(1f))
+                                IconButton(onClick = {
+                                    editing = CategoryEntity("", "", "✨", state.tab, 0, 0, parentId = parent.id)
+                                }) {
+                                    Icon(Icons.Filled.Add, contentDescription = "新增二级分类", tint = Sub)
+                                }
                                 Icon(
                                     Icons.Filled.Edit,
-                                    contentDescription = "编辑",
+                                    contentDescription = "编辑一级分类",
                                     tint = Sub,
                                     modifier = Modifier.size(18.dp),
                                 )
+                            }
+                            children.forEach { child ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { editing = child }
+                                        .padding(start = 38.dp, end = 16.dp, top = 7.dp, bottom = 7.dp),
+                                ) {
+                                    EmojiBadge(child.emoji, size = 30.dp)
+                                    Text(
+                                        child.name,
+                                        fontSize = 14.sp,
+                                        color = Ink,
+                                        modifier = Modifier.padding(start = 12.dp),
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Text("${state.counts[child.id] ?: 0} 条", fontSize = 11.sp, color = Sub)
+                                    Icon(
+                                        Icons.Filled.Edit,
+                                        contentDescription = "编辑二级分类",
+                                        tint = Sub,
+                                        modifier = Modifier.padding(start = 12.dp).size(16.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -141,17 +174,28 @@ fun CategoryManageScreen(onBack: () -> Unit) {
     }
 
     editing?.let { cat ->
+        val isParent = cat.parentId == null
+        val relatedIds = if (isParent) {
+            listOf(cat.id) + state.categories.filter { it.parentId == cat.id }.map { it.id }
+        } else {
+            listOf(cat.id)
+        }
         CategoryEditDialog(
             initial = cat,
-            count = state.counts[cat.id] ?: 0,
+            isParent = isParent,
+            count = relatedIds.sumOf { state.counts[it] ?: 0 },
             onSave = { name, emoji ->
-                if (cat.id.isEmpty()) vm.add(name, emoji) else vm.rename(cat.id, name, emoji)
+                if (cat.id.isEmpty()) vm.add(name, emoji, cat.parentId) else vm.rename(cat.id, name, emoji)
                 editing = null
             },
-            onDelete = if (cat.id.isEmpty() ||
-                cat.id == CategoryEntity.OTHER_EXPENSE || cat.id == CategoryEntity.OTHER_INCOME
+            onDelete = if (cat.id.isEmpty() || cat.id in setOf(
+                    CategoryEntity.OTHER_EXPENSE,
+                    CategoryEntity.OTHER_INCOME,
+                    CategoryEntity.OTHER_EXPENSE_PARENT,
+                    CategoryEntity.OTHER_INCOME_PARENT,
+                )
             ) {
-                null // 新增中 / 「其他」不可删
+                null
             } else {
                 { vm.delete(cat.id); editing = null }
             },
@@ -164,6 +208,7 @@ fun CategoryManageScreen(onBack: () -> Unit) {
 @Composable
 private fun CategoryEditDialog(
     initial: CategoryEntity,
+    isParent: Boolean,
     count: Int,
     onSave: (name: String, emoji: String) -> Unit,
     onDelete: (() -> Unit)?,
@@ -175,7 +220,8 @@ private fun CategoryEditDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(if (initial.id.isEmpty()) "新增分类" else "编辑分类", fontWeight = FontWeight.Bold)
+            val action = if (initial.id.isEmpty()) "新增" else "编辑"
+            Text("$action${if (isParent) "一级分类" else "二级分类"}", fontWeight = FontWeight.Bold)
         },
         text = {
             Column {
@@ -216,7 +262,11 @@ private fun CategoryEditDialog(
                 )
                 if (onDelete != null && count > 0) {
                     Text(
-                        "删除后，该分类下 $count 条记录将归入「其他」",
+                        if (isParent) {
+                            "删除后，该一级分类及其二级分类的 $count 条记录将归入「其它」"
+                        } else {
+                            "删除后，该分类下 $count 条记录将归入「其它」"
+                        },
                         fontSize = 11.sp,
                         color = Sub,
                         modifier = Modifier.padding(top = 8.dp),
