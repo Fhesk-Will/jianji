@@ -20,7 +20,8 @@ import java.time.format.DateTimeFormatter
  * 表格导入 / 导出。
  * 导出：CSV，写本应用缓存文件，由界面调用系统分享面板发出。
  * 导入：CSV 或 Excel（.xlsx，只读第一个工作表），列名用简记自己的规则；
- *       分类按名称匹配，匹配不到归入「其他」；逐行校验并报告首个错误行号。
+ *       新格式按一级 + 二级分类名称匹配，旧五列格式按唯一的二级分类名称匹配；
+ *       匹配不到或存在歧义时归入「其它」，逐行校验并报告首个错误行号。
  * 所有方法内部切到 IO 线程。
  */
 class CsvManager(
@@ -42,7 +43,8 @@ class CsvManager(
                 rows.forEach { r ->
                     sb.append(LocalDate.ofEpochDay(r.dateEpochDay.toLong())).append(',')
                         .append(if (r.type == RecordType.EXPENSE) "支出" else "收入").append(',')
-                        .append(escape("${r.categoryEmoji} ${r.categoryName}")).append(',')
+                        .append(escape(r.parentCategoryName.orEmpty())).append(',')
+                        .append(escape(r.categoryName)).append(',')
                         .append(Money.csvAmount(r.amountMinor)).append(',')
                         .append(escape(r.note)).append('\n')
                 }
@@ -74,15 +76,31 @@ class CsvManager(
             if (parsed.rows.isEmpty()) {
                 error(parsed.firstError ?: "没有可导入的记录")
             }
-            val categories = repo.snapshotCategories()
-            val byTypeAndName = categories
-                .filter { !it.isDeleted && it.parentId != null }
-                .associateBy { it.type to it.name }
+            val activeCategories = repo.snapshotCategories().filter { !it.isDeleted }
+            val parentsById = activeCategories.filter { it.parentId == null }.associateBy { it.id }
+            val byTypeAndPath = activeCategories
+                .filter { it.parentId != null }
+                .mapNotNull { child ->
+                    val parent = parentsById[child.parentId]
+                    if (parent == null || parent.type != child.type) return@mapNotNull null
+                    Triple(child.type, parent.name, child.name) to child
+                }
+                .groupBy({ it.first }, { it.second })
+            val byTypeAndName = activeCategories
+                .filter { it.parentId != null }
+                .groupBy({ it.type to it.name }, { it })
             var imported = 0
             parsed.rows.forEach { row ->
-                val categoryId = byTypeAndName[row.type to row.categoryName]?.id
-                    ?: if (row.type == RecordType.EXPENSE) CategoryEntity.OTHER_EXPENSE
-                    else CategoryEntity.OTHER_INCOME
+                val categoryId = (
+                    if (row.parentCategoryName != null) {
+                        byTypeAndPath[
+                            Triple(row.type, row.parentCategoryName, row.categoryName),
+                        ]?.singleOrNull()?.id
+                    } else {
+                        byTypeAndName[row.type to row.categoryName]?.singleOrNull()?.id
+                    }
+                ) ?: if (row.type == RecordType.EXPENSE) CategoryEntity.OTHER_EXPENSE
+                else CategoryEntity.OTHER_INCOME
                 repo.addRecord(row.type, row.amountMinor, categoryId, row.date, row.note)
                 imported++
             }
@@ -116,6 +134,7 @@ class CsvManager(
     private data class Row(
         val date: LocalDate,
         val type: RecordType,
+        val parentCategoryName: String?,
         val categoryName: String,
         val amountMinor: Long,
         val note: String,
@@ -142,10 +161,16 @@ class CsvManager(
         val body = if (hasHeader) table.drop(1) else table
         val idxDate = header.indexOfFirst { it.contains("日期") }.takeIf { it >= 0 } ?: 0
         val idxType = header.indexOfFirst { it.contains("类型") }.takeIf { it >= 0 } ?: 1
-        val idxCategory = header.indexOfFirst { it.contains("分类") }.takeIf { it >= 0 } ?: 2
+        val idxParentCategory = header.indexOf("一级分类").takeIf { it >= 0 }
+        val idxSecondCategory = header.indexOf("二级分类").takeIf { it >= 0 }
+        if ((idxParentCategory == null) != (idxSecondCategory == null)) {
+            return Parsed(emptyList(), 0, "表头缺少一级分类或二级分类")
+        }
+        val idxLegacyCategory = header.indexOf("分类").takeIf { it >= 0 }
+        val idxCategory = idxSecondCategory ?: idxLegacyCategory ?: 2
         val idxAmount = header.indexOfFirst { it.contains("金额") }.takeIf { it >= 0 } ?: 3
         val idxNote = header.indexOfFirst { it.contains("备注") }.takeIf { it >= 0 } ?: 4
-        val needCols = maxOf(idxDate, idxType, idxCategory, idxAmount) + 1
+        val needCols = maxOf(idxDate, idxType, idxCategory, idxAmount, idxParentCategory ?: 0) + 1
 
         val rows = mutableListOf<Row>()
         var skipped = 0
@@ -181,11 +206,19 @@ class CsvManager(
                 return@forEach
             }
             val categoryCell = raw.cells[idxCategory].text.trim()
+            val categoryName = if (idxParentCategory != null) {
+                categoryCell
+            } else {
+                categoryCell.substringAfter(' ').trim().ifEmpty { categoryCell }
+            }
             rows.add(
                 Row(
                     date = date,
                     type = type,
-                    categoryName = categoryCell.substringAfter(' ').trim().ifEmpty { categoryCell },
+                    parentCategoryName = idxParentCategory?.let { index ->
+                        raw.cells.getOrNull(index)?.text?.trim().orEmpty()
+                    },
+                    categoryName = categoryName,
                     amountMinor = amount,
                     note = raw.cells.getOrNull(idxNote)?.text?.trim().orEmpty(),
                 )
@@ -274,10 +307,10 @@ class CsvManager(
 
     companion object {
         /** 导出表头；同时作为 CSV 模板表头，改这里两边一起变 */
-        private const val HEADER = "日期,类型,分类,金额(元),备注"
+        private const val HEADER = "日期,类型,一级分类,二级分类,金额(元),备注"
 
-        /** 模板示例行：分类取默认分类「餐饮」，金额为正数，类型决定收支 */
-        private const val TEMPLATE_ROW = "2026-11-05,支出,餐饮,25.80,午饭"
+        /** 模板示例行：分类取默认分类「饮食 / 餐饮」，金额为正数，类型决定收支 */
+        private const val TEMPLATE_ROW = "2026-11-05,支出,饮食,餐饮,25.80,午饭"
 
         const val CSV_TEMPLATE_NAME = "简记导入模板.csv"
         const val CSV_MIME = "text/csv"

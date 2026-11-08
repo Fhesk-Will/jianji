@@ -79,16 +79,18 @@ object XlsxTemplate {
             "<row r=\"1\">" +
             "<c r=\"A1\" t=\"inlineStr\"><is><t>日期</t></is></c>" +
             "<c r=\"B1\" t=\"inlineStr\"><is><t>类型</t></is></c>" +
-            "<c r=\"C1\" t=\"inlineStr\"><is><t>分类</t></is></c>" +
-            "<c r=\"D1\" t=\"inlineStr\"><is><t>金额(元)</t></is></c>" +
-            "<c r=\"E1\" t=\"inlineStr\"><is><t>备注</t></is></c>" +
+            "<c r=\"C1\" t=\"inlineStr\"><is><t>一级分类</t></is></c>" +
+            "<c r=\"D1\" t=\"inlineStr\"><is><t>二级分类</t></is></c>" +
+            "<c r=\"E1\" t=\"inlineStr\"><is><t>金额(元)</t></is></c>" +
+            "<c r=\"F1\" t=\"inlineStr\"><is><t>备注</t></is></c>" +
             "</row>" +
             "<row r=\"2\">" +
             "<c r=\"A2\" t=\"inlineStr\"><is><t>2026-11-05</t></is></c>" +
             "<c r=\"B2\" t=\"inlineStr\"><is><t>支出</t></is></c>" +
-            "<c r=\"C2\" t=\"inlineStr\"><is><t>餐饮</t></is></c>" +
-            "<c r=\"D2\"><v>25.8</v></c>" +
-            "<c r=\"E2\" t=\"inlineStr\"><is><t>午饭</t></is></c>" +
+            "<c r=\"C2\" t=\"inlineStr\"><is><t>饮食</t></is></c>" +
+            "<c r=\"D2\" t=\"inlineStr\"><is><t>餐饮</t></is></c>" +
+            "<c r=\"E2\"><v>25.8</v></c>" +
+            "<c r=\"F2\" t=\"inlineStr\"><is><t>午饭</t></is></c>" +
             "</row>" +
             "</sheetData></worksheet>"
 }

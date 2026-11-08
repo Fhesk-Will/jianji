@@ -47,6 +47,10 @@ class CategoryViewModel(private val repo: LedgerRepository) : ViewModel() {
         viewModelScope.launch { repo.renameCategory(id, name, emoji) }
     }
 
+    fun move(id: String, direction: Int) {
+        viewModelScope.launch { repo.moveCategory(id, direction) }
+    }
+
     /** 删除分类：软删除 + 历史记录归入「其他」 */
     fun delete(id: String) {
         viewModelScope.launch { repo.deleteCategory(id) }

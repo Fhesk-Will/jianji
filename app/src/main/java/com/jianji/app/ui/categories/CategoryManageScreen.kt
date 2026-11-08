@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,6 +21,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,6 +73,7 @@ fun CategoryManageScreen(onBack: () -> Unit) {
 
     // null = 关闭；id 为空表示新增，parentId 区分一级/二级分类。
     var editing by remember { mutableStateOf<CategoryEntity?>(null) }
+    val expandedParents = remember { mutableStateMapOf<String, Boolean>() }
     val parents = state.categories.filter { it.parentId == null }
 
     Column(Modifier.fillMaxSize()) {
@@ -102,8 +107,9 @@ fun CategoryManageScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            parents.forEach { parent ->
+            parents.forEachIndexed { parentIndex, parent ->
                 val children = state.categories.filter { it.parentId == parent.id }
+                val expanded = expandedParents[parent.id] != false
                 item(key = parent.id) {
                     Card(
                         shape = RoundedCornerShape(16.dp),
@@ -119,7 +125,7 @@ fun CategoryManageScreen(onBack: () -> Unit) {
                                     .padding(start = 14.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
                             ) {
                                 EmojiBadge(parent.emoji, size = 36.dp)
-                                Column(Modifier.padding(start = 12.dp)) {
+                                Column(Modifier.padding(start = 12.dp).weight(1f)) {
                                     Text(parent.name, fontSize = 15.sp, color = Ink, fontWeight = FontWeight.Bold)
                                     val count = (listOf(parent) + children).sumOf { state.counts[it.id] ?: 0 }
                                     Text(
@@ -128,11 +134,25 @@ fun CategoryManageScreen(onBack: () -> Unit) {
                                         color = Sub,
                                     )
                                 }
-                                Spacer(Modifier.weight(1f))
-                                IconButton(onClick = {
-                                    editing = CategoryEntity("", "", "✨", state.tab, 0, 0, parentId = parent.id)
-                                }) {
-                                    Icon(Icons.Filled.Add, contentDescription = "新增二级分类", tint = Sub)
+                                ReorderButtons(
+                                    label = "一级分类",
+                                    canMoveUp = parentIndex > 0,
+                                    canMoveDown = parentIndex < parents.lastIndex,
+                                    onUp = { vm.move(parent.id, -1) },
+                                    onDown = { vm.move(parent.id, 1) },
+                                )
+                                IconButton(
+                                    onClick = {
+                                        editing = CategoryEntity("", "", "✨", state.tab, 0, 0, parentId = parent.id)
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Add,
+                                        contentDescription = "新增二级分类",
+                                        tint = Sub,
+                                        modifier = Modifier.size(18.dp),
+                                    )
                                 }
                                 Icon(
                                     Icons.Filled.Edit,
@@ -140,30 +160,48 @@ fun CategoryManageScreen(onBack: () -> Unit) {
                                     tint = Sub,
                                     modifier = Modifier.size(18.dp),
                                 )
-                            }
-                            children.forEach { child ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { editing = child }
-                                        .padding(start = 38.dp, end = 16.dp, top = 7.dp, bottom = 7.dp),
+                                IconButton(
+                                    onClick = { expandedParents[parent.id] = !expanded },
+                                    modifier = Modifier.size(32.dp),
                                 ) {
-                                    EmojiBadge(child.emoji, size = 30.dp)
-                                    Text(
-                                        child.name,
-                                        fontSize = 14.sp,
-                                        color = Ink,
-                                        modifier = Modifier.padding(start = 12.dp),
-                                    )
-                                    Spacer(Modifier.weight(1f))
-                                    Text("${state.counts[child.id] ?: 0} 条", fontSize = 11.sp, color = Sub)
                                     Icon(
-                                        Icons.Filled.Edit,
-                                        contentDescription = "编辑二级分类",
+                                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                        contentDescription = if (expanded) "收起二级分类" else "展开二级分类",
                                         tint = Sub,
-                                        modifier = Modifier.padding(start = 12.dp).size(16.dp),
                                     )
+                                }
+                            }
+                            if (expanded) {
+                                children.forEachIndexed { childIndex, child ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { editing = child }
+                                            .padding(start = 38.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
+                                    ) {
+                                        EmojiBadge(child.emoji, size = 30.dp)
+                                        Text(
+                                            child.name,
+                                            fontSize = 14.sp,
+                                            color = Ink,
+                                            modifier = Modifier.padding(start = 12.dp).weight(1f),
+                                        )
+                                        Text("${state.counts[child.id] ?: 0} 条", fontSize = 11.sp, color = Sub)
+                                        ReorderButtons(
+                                            label = "二级分类",
+                                            canMoveUp = childIndex > 0,
+                                            canMoveDown = childIndex < children.lastIndex,
+                                            onUp = { vm.move(child.id, -1) },
+                                            onDown = { vm.move(child.id, 1) },
+                                        )
+                                        Icon(
+                                            Icons.Filled.Edit,
+                                            contentDescription = "编辑二级分类",
+                                            tint = Sub,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -200,6 +238,30 @@ fun CategoryManageScreen(onBack: () -> Unit) {
                 { vm.delete(cat.id); editing = null }
             },
             onDismiss = { editing = null },
+        )
+    }
+}
+
+@Composable
+private fun ReorderButtons(
+    label: String,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+) {
+    IconButton(onClick = onUp, enabled = canMoveUp, modifier = Modifier.size(30.dp)) {
+        Icon(
+            Icons.Filled.KeyboardArrowUp,
+            contentDescription = "上移$label",
+            modifier = Modifier.size(20.dp),
+        )
+    }
+    IconButton(onClick = onDown, enabled = canMoveDown, modifier = Modifier.size(30.dp)) {
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = "下移$label",
+            modifier = Modifier.size(20.dp),
         )
     }
 }

@@ -149,13 +149,16 @@ class LedgerRepository(private val db: AppDatabase) {
 
     suspend fun addCategory(name: String, emoji: String, type: RecordType, parentId: String? = null) {
         val now = System.currentTimeMillis()
+        val nextOrder = categoryDao.snapshot()
+            .filter { !it.isDeleted && it.type == type && it.parentId == parentId }
+            .maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
         categoryDao.upsert(
             CategoryEntity(
                 id = "cat-" + UUID.randomUUID().toString(),
                 name = name.trim(),
                 emoji = emoji,
                 type = type,
-                sortOrder = 999,
+                sortOrder = nextOrder,
                 updatedAtEpochMs = now,
                 parentId = parentId,
             ),
@@ -164,6 +167,8 @@ class LedgerRepository(private val db: AppDatabase) {
 
     suspend fun renameCategory(id: String, name: String, emoji: String) =
         categoryDao.update(id, name.trim(), emoji, System.currentTimeMillis())
+
+    suspend fun moveCategory(id: String, direction: Int) = categoryDao.move(id, direction)
 
     /** 删除一级分类会同时删除其子分类；历史记录归入同类型的「其它」 */
     suspend fun deleteCategory(id: String) {

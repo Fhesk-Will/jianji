@@ -29,8 +29,8 @@ data class CsvRow(
     val amountMinor: Long,
     val dateEpochDay: Int,
     val note: String,
+    val parentCategoryName: String?,
     val categoryName: String,
-    val categoryEmoji: String,
 )
 
 @Dao
@@ -138,8 +138,10 @@ interface RecordDao {
         """
         SELECT r.id AS id, r.type AS type, r.amountMinor AS amountMinor,
                r.dateEpochDay AS dateEpochDay, r.note AS note,
-               c.name AS categoryName, c.emoji AS categoryEmoji
-        FROM records r JOIN categories c ON c.id = r.categoryId
+               p.name AS parentCategoryName, c.name AS categoryName
+        FROM records r
+        JOIN categories c ON c.id = r.categoryId
+        LEFT JOIN categories p ON p.id = c.parentId
         WHERE r.isDeleted = 0 AND r.dateEpochDay BETWEEN :from AND :to
         ORDER BY r.dateEpochDay, r.createdAtEpochMs
         """,
