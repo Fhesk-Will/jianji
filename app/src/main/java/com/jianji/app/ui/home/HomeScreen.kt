@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,7 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -31,6 +35,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -199,7 +204,11 @@ fun HomeScreen(
     }
 
     if (showFilter) {
-        ModalBottomSheet(onDismissRequest = { showFilter = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilter = false },
+            // 分类较多时直接全屏展开，配合内部滚动一屏可见更多分类
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
             FilterSheet(
                 state = state,
                 vm = vm,
@@ -245,10 +254,30 @@ private fun EmptyMonth(onAdd: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FilterSheet(state: HomeUiState, vm: HomeViewModel, onApply: () -> Unit) {
-    Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+    val type = state.filter.type
+    // 分组完全基于用户实际分类（支持改名、自建、排序），不依赖内置默认分类
+    val parents = state.categories
+        .filter { it.parentId == null && (type == null || it.type == type) }
+        .sortedWith(compareBy({ it.type }, { it.sortOrder }, { it.name }))
+    val leavesByParent = state.categories
+        .filter { it.parentId != null && (type == null || it.type == type) }
+        .groupBy { it.parentId }
+    // 父级被整体删除后可能残留孤儿二级分类，兜底单独展示，避免筛不到
+    val parentIds = parents.map { it.id }.toSet()
+    val orphans = state.categories
+        .filter { it.parentId != null && (type == null || it.type == type) && it.parentId !in parentIds }
+        .sortedWith(compareBy({ it.type }, { it.sortOrder }, { it.name }))
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp)
+            .padding(bottom = 24.dp),
+    ) {
         Text("筛选", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Ink)
 
         Text("类型", fontSize = 12.sp, color = Sub, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
@@ -259,7 +288,7 @@ private fun FilterSheet(state: HomeUiState, vm: HomeViewModel, onApply: () -> Un
         )
 
         Text("分类", fontSize = 12.sp, color = Sub, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
-        androidx.compose.foundation.layout.FlowRow(
+        FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -268,12 +297,46 @@ private fun FilterSheet(state: HomeUiState, vm: HomeViewModel, onApply: () -> Un
                 onClick = vm::clearCategoryFilter,
                 label = { Text("全部") },
             )
-            state.categories.forEach { cat ->
-                FilterChip(
-                    selected = state.filter.categoryIds?.contains(cat.id) == true,
-                    onClick = { vm.toggleCategory(cat.id) },
-                    label = { Text("${cat.emoji} ${cat.name}") },
-                )
+        }
+
+        parents.forEach { parent ->
+            val children = leavesByParent[parent.id].orEmpty()
+                .sortedWith(compareBy({ it.sortOrder }, { it.name }))
+            if (children.isEmpty()) return@forEach
+            Text(
+                "${parent.emoji} ${parent.name}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Ink,
+                modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                children.forEach { cat ->
+                    FilterChip(
+                        selected = state.filter.categoryIds?.contains(cat.id) == true,
+                        onClick = { vm.toggleCategory(cat.id) },
+                        label = { Text("${cat.emoji} ${cat.name}") },
+                    )
+                }
+            }
+        }
+
+        if (orphans.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 10.dp),
+            ) {
+                orphans.forEach { cat ->
+                    FilterChip(
+                        selected = state.filter.categoryIds?.contains(cat.id) == true,
+                        onClick = { vm.toggleCategory(cat.id) },
+                        label = { Text("${cat.emoji} ${cat.name}") },
+                    )
+                }
             }
         }
 

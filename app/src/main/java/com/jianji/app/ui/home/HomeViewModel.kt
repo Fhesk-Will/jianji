@@ -99,7 +99,8 @@ class HomeViewModel(private val repo: LedgerRepository) : ViewModel() {
             monthExpenseMinor = page.expenseMinor,
             monthIncomeMinor = page.incomeMinor,
             filter = f,
-            categories = page.categories.filter { it.parentId != null },
+            // 一二级分类都下发，筛选面板按用户实际分类分组展示
+            categories = page.categories,
         )
     }
 
@@ -117,7 +118,10 @@ class HomeViewModel(private val repo: LedgerRepository) : ViewModel() {
     }
 
     fun setType(t: RecordType?) {
-        filter.value = filter.value.copy(type = t)
+        // 切换收支类型时清空已选分类，避免跨类型的分类条件导致结果恒为空
+        filter.value =
+            if (filter.value.type == t) filter.value
+            else filter.value.copy(type = t, categoryIds = null)
     }
 
     fun setKeyword(k: String) {
