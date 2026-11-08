@@ -37,7 +37,9 @@ import com.jianji.app.ui.categories.CategoryManageScreen
 import com.jianji.app.ui.home.HomeScreen
 import com.jianji.app.ui.record.AddRecordScreen
 import com.jianji.app.ui.settings.SettingsScreen
+import com.jianji.app.ui.stats.DayDetailScreen
 import com.jianji.app.ui.stats.StatsScreen
+import com.jianji.app.util.Dates
 
 private data class Tab(val route: String, val icon: ImageVector, val label: String)
 
@@ -118,7 +120,9 @@ fun AppRoot(
                 )
             }
             composable(Routes.STATS) {
-                StatsScreen()
+                StatsScreen(
+                    onOpenDay = { date -> nav.navigate(Routes.dayDetail(Dates.epochDay(date))) },
+                )
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
@@ -163,6 +167,27 @@ fun AppRoot(
                 },
             ) {
                 CategoryManageScreen(onBack = { nav.popBackStack() })
+            }
+            composable(
+                route = Routes.DAY_DETAIL,
+                arguments = listOf(
+                    navArgument(Routes.DAY_DETAIL_ARG) { type = NavType.IntType },
+                ),
+                // 二级页：右侧推入 220ms
+                enterTransition = {
+                    slideInHorizontally(tween(220)) { it } + fadeIn(tween(120))
+                },
+                exitTransition = { fadeOut(tween(90)) },
+                popEnterTransition = { fadeIn(tween(120)) },
+                popExitTransition = {
+                    slideOutHorizontally(tween(220)) { it } + fadeOut(tween(90))
+                },
+            ) { entry ->
+                DayDetailScreen(
+                    epochDay = entry.arguments?.getInt(Routes.DAY_DETAIL_ARG) ?: 0,
+                    onBack = { nav.popBackStack() },
+                    onEdit = { id -> nav.navigate(Routes.record(id)) },
+                )
             }
         }
     }

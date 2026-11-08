@@ -2,6 +2,7 @@ package com.jianji.app.ui.stats
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,10 +25,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -49,10 +56,11 @@ import com.jianji.app.ui.theme.Ink
 import com.jianji.app.ui.theme.Line
 import com.jianji.app.ui.theme.Sub
 import com.jianji.app.util.Money
+import java.time.LocalDate
 
 /** 统计页：全部图表本地 Canvas 绘制，无网络、无第三方库 */
 @Composable
-fun StatsScreen() {
+fun StatsScreen(onOpenDay: (LocalDate) -> Unit) {
     val app = LocalContext.current.applicationContext as JianJiApp
     val vm: StatsViewModel = viewModel(initializer = { StatsViewModel(app.container.repo) })
     val state by vm.ui.collectAsStateWithLifecycle()
@@ -90,7 +98,7 @@ fun StatsScreen() {
             modifier = Modifier.fillMaxSize(),
         ) {
             item { DonutCard(state) }
-            item { TrendCard(state) }
+            item { TrendCard(state, onOpenDay) }
             item { RankCard(state) }
         }
     }
@@ -202,7 +210,7 @@ private fun DonutCard(state: StatsUiState) {
 // ---------- 每日柱状图 ----------
 
 @Composable
-private fun TrendCard(state: StatsUiState) {
+private fun TrendCard(state: StatsUiState, onOpenDay: (LocalDate) -> Unit) {
     val textMeasurer = rememberTextMeasurer()
     // remember 的计算 lambda 不是 Composable 上下文，颜色需先捕获
     val faintColor = Faint
@@ -218,25 +226,63 @@ private fun TrendCard(state: StatsUiState) {
         Column(Modifier.padding(14.dp)) {
             Text("每日${if (state.type == RecordType.EXPENSE) "支出" else "收入"}", fontSize = 12.5.sp, color = Sub, fontWeight = FontWeight.SemiBold)
             Canvas(
-                Modifier.fillMaxWidth().height(104.dp).padding(top = 8.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .height(104.dp)
+                    .padding(top = 8.dp)
+                    .pointerInput(state.month, state.daily) {
+                        detectTapGestures { offset ->
+                            val days = state.month.lengthOfMonth()
+                            val slot = size.width.toFloat() / days
+                            val day = (offset.x / slot).toInt() + 1
+                            val chartBottom = size.height - 14.dp.toPx()
+                            val hasData = state.daily.any { it.dayOfMonth == day && it.totalMinor > 0 }
+                            if (day in 1..days && offset.y <= chartBottom && hasData) {
+                                onOpenDay(state.month.atDay(day))
+                            }
+                        }
+                    },
             ) {
                 val days = state.month.lengthOfMonth()
-                val byDay = HashMap<Int, Long>()
-                state.daily.forEach { byDay[it.dayOfMonth] = it.totalMinor }
-                val max = byDay.values.maxOrNull() ?: 0L
+                val max = state.daily.maxOfOrNull { it.totalMinor } ?: 0L
                 val chartBottom = size.height - 14.dp.toPx()
-                val slot = size.width / days
+                val slot = size.width.toFloat() / days
                 val barWidth = (slot - 2.dp.toPx()).coerceAtLeast(3.dp.toPx())
-                byDay.forEach { (d, v) ->
-                    if (v <= 0) return@forEach
-                    val h = if (max > 0) (v.toFloat() / max) * (chartBottom - 6.dp.toPx()) else 0f
-                    val x = (d - 1) * slot + (slot - barWidth) / 2
-                    drawRoundRect(
-                        color = if (v == max) chartColors[0] else trackColor,
-                        topLeft = Offset(x, chartBottom - h),
-                        size = Size(barWidth, h.coerceAtLeast(2.dp.toPx())),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.5.dp.toPx()),
-                    )
+                val maxBarHeight = (chartBottom - 6.dp.toPx()).coerceAtLeast(0f)
+                val corner = CornerRadius(2.5.dp.toPx())
+                state.daily.forEach { bar ->
+                    if (bar.totalMinor <= 0) return@forEach
+                    val h = if (max > 0) (bar.totalMinor.toFloat() / max) * maxBarHeight else 0f
+                    val barH = h.coerceAtLeast(2.dp.toPx())
+                    val x = (bar.dayOfMonth - 1) * slot + (slot - barWidth) / 2
+                    val barTop = chartBottom - barH
+                    val barPath = Path().apply {
+                        addRoundRect(RoundRect(Rect(Offset(x, barTop), Size(barWidth, barH)), corner))
+                    }
+                    // 分段按占比从大到小、从上到下堆叠，整根柱子统一圆角
+                    clipPath(barPath) {
+                        if (bar.segments.isEmpty()) {
+                            drawRect(
+                                color = trackColor,
+                                topLeft = Offset(x, barTop),
+                                size = Size(barWidth, barH),
+                            )
+                        } else {
+                            var acc = 0f
+                            bar.segments.forEachIndexed { i, seg ->
+                                val top = barTop + barH * acc
+                                acc += seg.share
+                                val bottom = if (i == bar.segments.lastIndex) chartBottom else barTop + barH * acc
+                                if (bottom > top) {
+                                    drawRect(
+                                        color = chartColors[seg.colorIndex % chartColors.size],
+                                        topLeft = Offset(x, top),
+                                        size = Size(barWidth, bottom - top),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
                 // x 轴刻度
                 val marks = listOf(1, 5, 10, 15, 20, 25, days).distinct()
@@ -247,7 +293,7 @@ private fun TrendCard(state: StatsUiState) {
                 }
             }
             Text(
-                "点柱跳转当日明细（二期）",
+                "点柱跳转当日明细",
                 fontSize = 10.5.sp,
                 color = Faint,
                 modifier = Modifier.padding(start = 2.dp),

@@ -22,6 +22,14 @@ data class DailyTotal(
     val totalMinor: Long,
 )
 
+/** 统计页：单日 + 分类合计（柱状图分段用） */
+data class DailyCategoryTotal(
+    val epochDay: Int,
+    val categoryId: String,
+    val name: String,
+    val totalMinor: Long,
+)
+
 /** CSV 导出行 */
 data class CsvRow(
     val id: String,
@@ -111,6 +119,24 @@ interface RecordDao {
         """,
     )
     fun dailyTotals(from: Int, to: Int, type: RecordType): Flow<List<DailyTotal>>
+
+    @Query(
+        """
+        SELECT r.dateEpochDay AS epochDay, r.categoryId AS categoryId,
+               c.name AS name, SUM(r.amountMinor) AS totalMinor
+        FROM records r JOIN categories c ON c.id = r.categoryId
+        WHERE r.dateEpochDay BETWEEN :from AND :to AND r.isDeleted = 0 AND r.type = :type
+        GROUP BY r.dateEpochDay, r.categoryId, c.name
+        """,
+    )
+    fun dailyCategoryTotals(from: Int, to: Int, type: RecordType): Flow<List<DailyCategoryTotal>>
+
+    /** 单日明细页 */
+    @Query(
+        "SELECT * FROM records WHERE dateEpochDay = :epochDay AND isDeleted = 0 " +
+            "ORDER BY createdAtEpochMs DESC",
+    )
+    fun recordsOnDay(epochDay: Int): Flow<List<RecordEntity>>
 
     /** 软删除（同步口子：保留墓碑） */
     @Query("UPDATE records SET isDeleted = 1, updatedAtEpochMs = :now WHERE id = :id")

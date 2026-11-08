@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import java.time.LocalDate
 import java.time.YearMonth
 
 data class CatShare(
@@ -22,9 +23,19 @@ data class CatShare(
     val share: Float,
 )
 
+/** 柱状图单日的一段时间：颜色跟随当月分类占比列表，占比决定高度 */
+data class DayBarSegment(
+    /** 当月分类占比列表中的颜色序号 */
+    val colorIndex: Int,
+    /** 当天该分类占当天总额的比例 0..1 */
+    val share: Float,
+)
+
 data class DayBar(
     val dayOfMonth: Int,
     val totalMinor: Long,
+    /** 按占比从大到小排列（绘制时从上到下） */
+    val segments: List<DayBarSegment> = emptyList(),
 )
 
 data class StatsUiState(
@@ -53,6 +64,11 @@ class StatsViewModel(private val repo: LedgerRepository) : ViewModel() {
                     repo.statsFlow(m, RecordType.INCOME),
                 ) { cur, exp, inc ->
                     val total = cur.totalMinor
+                    // 分类颜色与环形图/图例保持一致：按当月分类合计降序编号
+                    val colorIndexById = cur.categoryTotals
+                        .mapIndexed { i, c -> c.categoryId to i }
+                        .toMap()
+                    val catsByDay = cur.dailyCategoryTotals.groupBy { it.epochDay }
                     StatsUiState(
                         month = m,
                         type = t,
@@ -68,8 +84,24 @@ class StatsViewModel(private val repo: LedgerRepository) : ViewModel() {
                                 share = if (total > 0) it.totalMinor.toFloat() / total else 0f,
                             )
                         },
-                        daily = cur.dailyTotals.map {
-                            DayBar(dayOfMonth = java.time.LocalDate.ofEpochDay(it.epochDay.toLong()).dayOfMonth, totalMinor = it.totalMinor)
+                        daily = cur.dailyTotals.map { day ->
+                            val segments = catsByDay[day.epochDay].orEmpty()
+                                .sortedByDescending { it.totalMinor }
+                                .map { c ->
+                                    DayBarSegment(
+                                        colorIndex = colorIndexById[c.categoryId] ?: 0,
+                                        share = if (day.totalMinor > 0) {
+                                            c.totalMinor.toFloat() / day.totalMinor
+                                        } else {
+                                            0f
+                                        },
+                                    )
+                                }
+                            DayBar(
+                                dayOfMonth = LocalDate.ofEpochDay(day.epochDay.toLong()).dayOfMonth,
+                                totalMinor = day.totalMinor,
+                                segments = segments,
+                            )
                         },
                     )
                 }

@@ -2,6 +2,7 @@ package com.jianji.app.data.repository
 
 import com.jianji.app.data.DefaultCategories
 import com.jianji.app.data.dao.CategoryTotal
+import com.jianji.app.data.dao.DailyCategoryTotal
 import com.jianji.app.data.dao.DailyTotal
 import com.jianji.app.data.db.AppDatabase
 import com.jianji.app.data.entity.CategoryEntity
@@ -82,6 +83,7 @@ class LedgerRepository(private val db: AppDatabase) {
         val totalMinor: Long,
         val categoryTotals: List<CategoryTotal>,
         val dailyTotals: List<DailyTotal>,
+        val dailyCategoryTotals: List<DailyCategoryTotal>,
     )
 
     fun statsFlow(month: YearMonth, type: RecordType): Flow<StatsPage> {
@@ -90,10 +92,25 @@ class LedgerRepository(private val db: AppDatabase) {
             recordDao.sumBetween(from, to, type),
             recordDao.categoryTotals(from, to, type),
             recordDao.dailyTotals(from, to, type),
-        ) { sum, cats, daily ->
-            StatsPage(sum ?: 0L, cats, daily)
+            recordDao.dailyCategoryTotals(from, to, type),
+        ) { sum, cats, daily, dailyCats ->
+            StatsPage(sum ?: 0L, cats, daily, dailyCats)
         }
     }
+
+    /** 单日明细页一屏数据 */
+    data class DayPage(
+        val records: List<RecordEntity>,
+        val categories: List<CategoryEntity>,
+    )
+
+    fun dayPageFlow(epochDay: Int): Flow<DayPage> =
+        combine(
+            recordDao.recordsOnDay(epochDay),
+            categoryDao.active(),
+        ) { records, cats ->
+            DayPage(records, cats)
+        }
 
     suspend fun recordOnce(id: String): RecordEntity? = recordDao.byId(id)
 
