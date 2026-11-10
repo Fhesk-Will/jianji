@@ -56,7 +56,7 @@ gradlew.bat assembleRelease      # Windows
 ./gradlew assembleRelease        # macOS / Linux
 ```
 
-产物在 `app/build/outputs/apk/release/jianji-v<版本>.apk`，经 R8 裁剪后约 2 MB。版本号取自 `gradle.properties` 的 `releaseVersionDate` 与 `releaseVersionSeq`（日期 + 当日序号），同日再发一版只需递增序号。（作者本机另有 `scripts/release.ps1` 一键出包，不随仓库分发。）
+产物在 `app/build/outputs/apk/release/jianji-v<版本>-<versionCode>.apk`，经 R8 裁剪后约 2 MB。版本号取自 `gradle.properties` 的 `releaseVersionDate` 与 `releaseVersionSeq`（日期 + 当日序号），同日再发一版只需递增序号。（作者本机另有 `scripts/release.ps1` 一键出包，不随仓库分发。）
 
 发布包请用脚本生成：直接跑 `assembleRelease` 只更新 `app/build/outputs/` 里的文件，不会同步根目录的 APK 与 `SHA256SUMS.txt`。
 
