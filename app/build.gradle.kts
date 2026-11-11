@@ -8,21 +8,39 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// ---- 发布版本号：单一来源 gradle.properties；CI / 发布脚本可用 -P 覆盖 ----
-val releaseVersionDate: String = providers.gradleProperty("releaseVersionDate").orNull
-    ?: throw GradleException("缺少 releaseVersionDate：请在 gradle.properties 设置 YYYY.MM.DD 格式的日期")
-if (!Regex("""\d{4}\.\d{2}\.\d{2}""").matches(releaseVersionDate)) {
-    throw GradleException(
-        "releaseVersionDate=\"$releaseVersionDate\" 非法：必须为 YYYY.MM.DD（月/日补零，如 2026.11.05）",
-    )
+// ---- 发布版本号：由 scripts/release.ps1 通过 -P 传入；gradle.properties 仅作兜底 ----
+//   正式出包：-PjianjiVersionName=2026.11.11.1 -PjianjiVersionCode=2026111101
+//   直接跑 gradlew（IDE / 临时验证）：回退到 gradle.properties 的 releaseVersionDate / releaseVersionSeq
+val overrideVersionName = providers.gradleProperty("jianjiVersionName").orNull
+val overrideVersionCode = providers.gradleProperty("jianjiVersionCode").orNull?.toIntOrNull()
+val (derivedVersionName, derivedVersionCode) = run {
+    if (overrideVersionName != null && overrideVersionCode != null) {
+        if (!Regex("""\d{4}\.\d{2}\.\d{2}\.\d{1,2}""").matches(overrideVersionName)) {
+            throw GradleException("jianjiVersionName=\"$overrideVersionName\" 非法：应为 YYYY.MM.DD.序号")
+        }
+        if (overrideVersionCode <= 0) {
+            throw GradleException("jianjiVersionCode=$overrideVersionCode 非法：应为正整数")
+        }
+        overrideVersionName to overrideVersionCode
+    } else {
+        val releaseVersionDate: String = providers.gradleProperty("releaseVersionDate").orNull
+            ?: throw GradleException(
+                "未传入 -PjianjiVersionName/-PjianjiVersionCode，且 gradle.properties 缺少 releaseVersionDate 兜底值",
+            )
+        if (!Regex("""\d{4}\.\d{2}\.\d{2}""").matches(releaseVersionDate)) {
+            throw GradleException(
+                "releaseVersionDate=\"$releaseVersionDate\" 非法：必须为 YYYY.MM.DD（月/日补零，如 2026.11.05）",
+            )
+        }
+        val releaseVersionSeq: Int = providers.gradleProperty("releaseVersionSeq").orNull?.toIntOrNull()
+            ?: throw GradleException("releaseVersionSeq 缺失或不是整数：请设置 1..99")
+        if (releaseVersionSeq !in 1..99) {
+            throw GradleException("releaseVersionSeq=$releaseVersionSeq 非法：必须为 1..99")
+        }
+        "$releaseVersionDate.$releaseVersionSeq" to
+            (releaseVersionDate.replace(".", "").toInt() * 100 + releaseVersionSeq)
+    }
 }
-val releaseVersionSeq: Int = providers.gradleProperty("releaseVersionSeq").orNull?.toIntOrNull()
-    ?: throw GradleException("releaseVersionSeq 缺失或不是整数：请在 gradle.properties 设置 1..99")
-if (releaseVersionSeq !in 1..99) {
-    throw GradleException("releaseVersionSeq=$releaseVersionSeq 非法：必须为 1..99（同日多版依次递增）")
-}
-val derivedVersionName = "$releaseVersionDate.$releaseVersionSeq"
-val derivedVersionCode = releaseVersionDate.replace(".", "").toInt() * 100 + releaseVersionSeq
 
 // ---- 签名：release 必须提供完整签名材料，缺失直接失败，不再静默回退 debug ----
 val keystorePropsFile = rootProject.file("keystore.properties")

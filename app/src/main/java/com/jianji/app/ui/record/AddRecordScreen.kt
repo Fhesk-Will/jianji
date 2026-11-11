@@ -181,6 +181,24 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
             )
         }
 
+        // 日期 + 备注：固定在头部，键盘升起时不被遮挡
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        ) {
+            DateField(date = state.date, onPick = vm::setDate)
+            OutlinedTextField(
+                value = state.note,
+                onValueChange = vm::setNote,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium,
+                placeholder = { Text("备注（选填）", fontSize = 13.sp) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                modifier = Modifier.weight(1f).height(52.dp),
+            )
+        }
+
         // 分类宫格
         CategoryGrid(
             categories = state.categories,
@@ -189,22 +207,6 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
             onSelect = vm::selectCategory,
             modifier = Modifier.padding(horizontal = 14.dp).weight(1f),
         )
-
-        // 日期 + 备注
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        ) {
-            DateField(date = state.date, onPick = vm::setDate)
-            OutlinedTextField(
-                value = state.note,
-                onValueChange = vm::setNote,
-                singleLine = true,
-                placeholder = { Text("备注（选填）") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                modifier = Modifier.weight(1f),
-            )
-        }
 
         Keypad(
             onKey = vm::onKey,

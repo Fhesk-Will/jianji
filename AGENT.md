@@ -23,10 +23,11 @@ gradlew.bat :app:assembleRelease    # 需签名材料，否则构建直接失败
 
 ## 3. 版本号机制
 
-- 唯一来源：`gradle.properties` 的 `releaseVersionDate`（`YYYY.MM.DD`，月日补零）与 `releaseVersionSeq`（1..99）。
+- 版本号由 `scripts/release.ps1` 计算一次：日期取当天，序号 = 远端当天已有 tag 的最大序号 + 1，再以 `-PjianjiVersionName` / `-PjianjiVersionCode` 传给 Gradle；不改 `gradle.properties`。
+- `gradle.properties` 的 `releaseVersionDate` / `releaseVersionSeq` 只是直接跑 `gradlew` 时的兜底值，不是手工维护的版本来源。
 - 派生规则：`versionName = 日期.序号`，`versionCode = 去掉点的日期 × 100 + 序号`
   （例：`2026.11.05` + `1` → `2026.11.05.1` / `2026110501`）。
-- 改版本只改这两行；校验与派生都在 `app/build.gradle.kts` 顶部，非法值会让构建失败。
+- 校验与派生都在 `app/build.gradle.kts` 顶部，非法值会让构建失败。
 - APK 文件名由 `app/build.gradle.kts` 的 `androidComponents.onVariants` 决定，格式固定为 `jianji-v<versionName>-<versionCode>.apk`，同日多版不覆盖。
 - 仓库外分发包命名：本地测试包带 `HHmm` 时间戳（`scripts/release.ps1` 设置），GitHub Release 资产名不带时间戳，`SHA256SUMS.txt` 记录的是上传名。
 - 同日再发一版：日期不动、序号 +1；跨日：日期改为当天、序号回 1。
