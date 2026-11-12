@@ -18,6 +18,8 @@ gradlew.bat :app:assembleRelease    # 需签名材料，否则构建直接失败
 - debug 产物：`app/build/outputs/apk/debug/`
 - release 产物：`app/build/outputs/apk/release/jianji-v<versionName>-<versionCode>.apk`
 - 发布脚本（仅本机，被 `.gitignore` 排除）：`powershell -NoProfile -File scripts/release.ps1`；具体行为以脚本头部注释为准，脚本自身不打 tag、不推送。
+- 产物只留最新一版：仓库上一级目录只保留最新上传用 APK 与 `SHA256SUMS.txt`；`scripts/release.ps1` 出包时自动删旧包，发布后跑一次 `-PostPublish` 删测试包。
+- 发布用的是已测过的产物：直接上传本机 `jianji-v<versionName>.apk`，不为发布重新构建、不重算摘要。
 - release 签名来自仓库根目录的 `keystore.properties`（字段：`storeFile` / `storePassword` / `keyAlias` / `keyPassword`），缺失时 `app/build.gradle.kts` 的 `taskGraph` 校验会直接报错，不会回退 debug 签名。
 - 验收下限：`:app:assembleDebug` 与 `:app:assembleRelease` 都能通过，且 release 产物由正式密钥签名。
 

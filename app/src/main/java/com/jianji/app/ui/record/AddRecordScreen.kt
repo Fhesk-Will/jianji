@@ -70,7 +70,11 @@ import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
+fun AddRecordScreen(
+    recordId: String?,
+    onLocate: (Int) -> Unit,
+    onDone: () -> Unit,
+) {
     val app = LocalContext.current.applicationContext as JianJiApp
     val vm: AddRecordViewModel = viewModel(
         key = recordId ?: "new",
@@ -79,7 +83,13 @@ fun AddRecordScreen(recordId: String?, onDone: () -> Unit) {
     val state by vm.ui.collectAsStateWithLifecycle()
     val finished by vm.finished.collectAsStateWithLifecycle()
 
-    LaunchedEffect(finished) { if (finished) onDone() }
+    // savedEpochDay 只在新建保存成功时非空；编辑/删除/取消走 onDone，不带落点
+    LaunchedEffect(finished) {
+        if (finished) {
+            vm.savedEpochDay.value?.let(onLocate)
+            onDone()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         // 顶栏

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,10 +38,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -61,17 +64,39 @@ import com.jianji.app.ui.theme.Sub
 import com.jianji.app.util.Dates
 import com.jianji.app.util.Money
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import java.time.YearMonth
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onAdd: () -> Unit,
     onEdit: (String) -> Unit,
+    /** 新建记录保存后的落点日期（epochDay）；编辑、取消、删除时为 null */
+    locateEpochDay: Int? = null,
+    onLocateConsumed: () -> Unit = {},
 ) {
     val app = LocalContext.current.applicationContext as JianJiApp
     val vm: HomeViewModel = viewModel(initializer = { HomeViewModel(app.container.repo) })
     val state by vm.ui.collectAsStateWithLifecycle()
     var showFilter by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    // 新建保存后：先切到该记录所在月份，再把当天分组顶到列表最上方
+    LaunchedEffect(locateEpochDay) {
+        val epochDay = locateEpochDay ?: return@LaunchedEffect
+        val target = Dates.ofEpochDay(epochDay)
+        val targetMonth = YearMonth.from(target)
+        if (state.month != targetMonth) vm.setMonth(targetMonth)
+        // 切月后数据异步到达；等该日分组出现再定位，找不到（如被筛选隐藏）则回顶
+        val index = withTimeoutOrNull(1_000) {
+            snapshotFlow { state.sections.indexOfFirst { it.date == target } }
+                .first { it >= 0 }
+        }
+        listState.scrollToItem(index ?: 0)
+        onLocateConsumed()
+    }
 
     Column(Modifier.fillMaxSize()) {
         MonthBar(
@@ -116,6 +141,7 @@ fun HomeScreen(
                 EmptyMonth(onAdd)
             } else {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),

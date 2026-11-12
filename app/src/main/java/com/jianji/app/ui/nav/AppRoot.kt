@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -113,10 +114,16 @@ fun AppRoot(
             popEnterTransition = { EnterTransition.None },
             popExitTransition = { ExitTransition.None },
         ) {
-            composable(Routes.HOME) {
+            composable(Routes.HOME) { entry ->
+                // 新建记录保存后由记一笔页写入落点，这里消费一次（编辑/取消不会写）
+                val locateDay by entry.savedStateHandle
+                    .getStateFlow<Int?>(Routes.SAVED_LOCATE_DAY, null)
+                    .collectAsStateWithLifecycle()
                 HomeScreen(
                     onAdd = { nav.navigate(Routes.record()) },
                     onEdit = { id -> nav.navigate(Routes.record(id)) },
+                    locateEpochDay = locateDay,
+                    onLocateConsumed = { entry.savedStateHandle[Routes.SAVED_LOCATE_DAY] = null },
                 )
             }
             composable(Routes.STATS) {
@@ -152,7 +159,16 @@ fun AppRoot(
                 },
             ) { entry ->
                 val recordId = entry.arguments?.getString(Routes.RECORD_ARG)
-                AddRecordScreen(recordId = recordId, onDone = { nav.popBackStack() })
+                AddRecordScreen(
+                    recordId = recordId,
+                    onLocate = { epochDay ->
+                        // 回传给明细页（当前页的上一页就是 HOME）
+                        nav.previousBackStackEntry
+                            ?.savedStateHandle
+                            ?.set(Routes.SAVED_LOCATE_DAY, epochDay)
+                    },
+                    onDone = { nav.popBackStack() },
+                )
             }
             composable(
                 route = Routes.CATEGORIES,

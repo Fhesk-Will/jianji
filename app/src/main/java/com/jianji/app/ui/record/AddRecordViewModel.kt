@@ -43,6 +43,9 @@ class AddRecordViewModel(
     private val state = MutableStateFlow(AddUiState())
     val finished = MutableStateFlow(false)
 
+    /** 仅「新建并保存成功」时写入日期：明细页据此切月并定位到该日分组 */
+    val savedEpochDay = MutableStateFlow<Int?>(null)
+
     val ui: StateFlow<AddUiState> = combine(
         state,
         state.flatMapLatest { repo.categoriesFlow(it.type) },
@@ -120,6 +123,8 @@ class AddRecordViewModel(
                 repo.updateRecord(recordId!!, s.type, amount, cat, s.date, s.note)
             } else {
                 repo.addRecord(s.type, amount, cat, s.date, s.note)
+                // 只有新建成功才回传落点；编辑、删除、取消都不写
+                savedEpochDay.value = Dates.epochDay(s.date)
             }
             settingsStore.recordCategoryUse(s.type, cat)
             finished.value = true
