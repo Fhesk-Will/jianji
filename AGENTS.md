@@ -23,12 +23,17 @@ gradlew.bat :app:assembleRelease    # 需签名材料，否则构建直接失败
 - 发布脚本（仅本机，被 `.gitignore` 排除）：`powershell -NoProfile -File scripts/release.ps1`；具体行为以脚本头部注释为准，脚本自身不打 tag、不推送。
 - 产物只留最新一版：仓库上一级目录只保留最新上传用 APK 与 `SHA256SUMS.txt`；`scripts/release.ps1` 出包时自动删旧包，发布后跑一次 `-PostPublish` 删测试包。
 - 发布用的是已测过的产物：直接上传本机 `jianji-v<versionName>.apk`，不为发布重新构建、不重算摘要。
-- release 签名来自仓库根目录的 `keystore.properties`（字段：`storeFile`、`storePassword`、`keyAlias`、`keyPassword`，指向 `jianji-release.jks`）。仓库不跟踪密钥文件；`keystore.properties` 在本仓库被 Git 跟踪但仅含字段名不含真实值时可直接构建，缺失则 release 构建失败。
+- release 签名来自仓库根目录的 `keystore.properties`（字段：`storeFile` / `storePassword` / `keyAlias` / `keyPassword`），缺失时 `app/build.gradle.kts` 的 `taskGraph` 校验会直接报错，不会回退 debug 签名。
+- 验收下限：`:app:assembleDebug` 与 `:app:assembleRelease` 都能通过，且 release 产物由正式密钥签名。
 
 ## 3. 版本号机制
 
-- 格式：`<yyyyMMdd>.<序号>`（例：`2026.11.04.1`），序号=当天第几版。
-- 兜底值在 `gradle.properties`（`VERSION_NAME`/`VERSION_CODE`）；release.ps1 负责实际递增。
+- 版本号由 `scripts/release.ps1` 计算一次：日期取当天，序号 = 远端当天已有 tag 的最大序号 + 1，再以 `-PjianjiVersionName` / `-PjianjiVersionCode` 传给 Gradle；不改 `gradle.properties`。
+- `gradle.properties` 的 `releaseVersionDate` / `releaseVersionSeq` 只是直接跑 `gradlew` 时的兜底值，不是手工维护的版本来源。
+- 派生规则：`versionName = 日期.序号`，`versionCode = 去掉点的日期 × 100 + 序号`
+  （例：`2026.11.05` + `1` → `2026.11.05.1` / `2026110501`）。
+- 校验与派生都在 `app/build.gradle.kts` 顶部，非法值会让构建失败。
+- APK 文件名由 `app/build.gradle.kts` 的 `androidComponents.onVariants` 决定，格式固定为 `jianji-v<versionName>-<versionCode>.apk`，同日多版不覆盖。
 - 仓库外分发包命名：本地测试包带 `HHmm` 时间戳（`scripts/release.ps1` 设置），GitHub Release 资产名不带时间戳，`SHA256SUMS.txt` 记录的是上传名。
 - 同日再发一版：日期不动、序号 +1；跨日：日期改为当天、序号回 1。
 - 不要在代码里写版本号；界面显示用 `BuildConfig.VERSION_NAME`。
@@ -59,13 +64,15 @@ App 包根 `app/src/main/java/com/jianji/app/`（注意：仓库根 `app/` 是 A
 - 未经确认引入新依赖，尤其是会显著增大包体的库（体积以 `app/build/outputs/apk/release/` 的实际产物为准）。
 - 改动签名配置，或让 release 回退到 debug 签名。
 - 把 README 写成开发文档；README 面向普通用户。
+- 恢复已砍掉的备份功能（备份目录、自动备份、从备份恢复）。
 
 ## 7. 改动纪律
 
-- 跨包改动先看本文件的「代码组织」与「事实核验入口」；文档与代码冲突时以代码为准，同次改动里修正文档。
-- 只改受影响的最小范围；不顺手重排 import、不改无关命名。
-- UI 改动后至少跑一次 `:app:assembleDebug` 确认编译。
-- 新增设置项同步更新 SettingsStore；新增 Room 表必须出迁移方案，禁止 drop 重建。
+- 先读相关文件再改，不凭印象写 API、命令或字段名。
+- 一次只处理一个明确目标；不顺手重构无关代码、不改无关文案。
+- 每次改动后至少跑一遍 `:app:assembleDebug`；动到签名、混淆、发布逻辑时再跑 `:app:assembleRelease`。
+- 默认不 commit、不 push、不打 tag、不改写 Git 历史；只有用户明确要求才做。
+- 不擅自扩大改动范围，不新增未被要求的功能。
 
 ## 8. 事实核验入口
 

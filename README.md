@@ -33,9 +33,9 @@ git clone https://github.com/Fhesk-Will/jianji.git
 cd jianji
 ```
 
-release 包必须签名。没有现成密钥库的话先生成一个（一次性工作，以后复用）：
+release 包必须签名。没有现成密钥库的话先生成一个（一次即可，之后务必妥善保管）：
 
-```
+```bash
 keytool -genkeypair -v -keystore jianji-release.jks -alias jianji \
   -keyalg RSA -keysize 2048 -validity 10000
 ```
@@ -58,7 +58,7 @@ gradlew.bat assembleRelease      # Windows
 
 产物在 `app/build/outputs/apk/release/jianji-v<版本>-<versionCode>.apk`，经 R8 裁剪后约 2 MB。版本号是「当天日期 + 当日序号」；作者本机的 `scripts/release.ps1` 会自动算出序号（当天已有版本 +1）再打包，不随仓库分发。直接在本仓库构建时，版本号用 `gradle.properties` 里的兜底值。
 
-发布包请用脚本生成：直接跑 `assembleRelease` 只更新 `app/build/outputs/apk/` 里的文件，不会同步根目录的 APK 与 `SHA256SUMS.txt`。
+发布包请用脚本生成：直接跑 `assembleRelease` 只更新 `app/build/outputs/` 里的文件，不会同步根目录的 APK 与 `SHA256SUMS.txt`。
 
 只想调试而不打包的话，用 Android Studio 打开本目录，等同步完成后点 Run 即可装到设备或模拟器上。
 

@@ -36,7 +36,8 @@ async def export_snapshot(pool: Pool, version: int | None) -> dict | None:
     """按版本号取快照原文（gunzip → JSON）。version=None → 当前版本。"""
     if version is None:
         row = await pool.fetchrow(
-            "SELECT payload_gz FROM snapshots WHERE id = (SELECT max(id) FROM snapshots)"
+            "SELECT payload_gz FROM snapshots "
+            "WHERE id = (SELECT max(id) FROM snapshots)"
         )
     else:
         row = await pool.fetchrow(
