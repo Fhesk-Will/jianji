@@ -49,14 +49,3 @@ CREATE TABLE IF NOT EXISTS client_pairing (
     needs_merge BOOLEAN NOT NULL DEFAULT FALSE,
     paired_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- 旧库升级：PG 不支持 ADD COLUMN IF NOT EXISTS，用 DO 块补列（幂等）
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name = 'client_pairing'
-                     AND column_name = 'needs_merge') THEN
-        ALTER TABLE client_pairing
-            ADD COLUMN needs_merge BOOLEAN NOT NULL DEFAULT FALSE;
-    END IF;
-END $$;
