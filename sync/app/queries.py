@@ -18,6 +18,40 @@ PAGE_SIZE_MAX = 200
 RANGE_MAX_DAYS = 3700        # 约 10 年
 CATEGORY_FILTER_MAX = 100    # categoryIds 多选上限
 
+VALID_TYPES = ("EXPENSE", "INCOME")
+
+
+class ParamError(ValueError):
+    """查询参数非法。HTTP 层转 400，MCP 层转工具错误；消息即用户可见文案。"""
+
+
+def check_range(from_day: int, to_day: int) -> None:
+    """日期区间护栏：from<=to 且跨度不超上限（防一次拉全账本）。"""
+    if from_day > to_day:
+        raise ParamError("from 必须小于等于 to")
+    if to_day - from_day > RANGE_MAX_DAYS:
+        raise ParamError(f"查询区间过大（上限 {RANGE_MAX_DAYS} 天）")
+
+
+def parse_category_ids(ids: list[str] | None) -> list[str] | None:
+    """categoryIds 列表清洗；空项/超量都是 ParamError（HTTP 的逗号串先 split）。"""
+    if ids is None:
+        return None
+    cleaned = [s.strip() for s in ids]
+    if not cleaned or any(not s for s in cleaned):
+        raise ParamError("categoryIds 含空 id")
+    if len(cleaned) > CATEGORY_FILTER_MAX:
+        raise ParamError(f"categoryIds 过多（上限 {CATEGORY_FILTER_MAX} 个）")
+    return cleaned
+
+
+def check_page(page: int, page_size: int) -> None:
+    """分页护栏，与 HTTP Query(ge=1, le=PAGE_SIZE_MAX) 约束一致。"""
+    if page < 1:
+        raise ParamError("page 必须大于等于 1")
+    if not 1 <= page_size <= PAGE_SIZE_MAX:
+        raise ParamError(f"pageSize 必须在 1～{PAGE_SIZE_MAX} 之间")
+
 
 async def list_versions(pool: Pool, limit: int = 100) -> list[dict]:
     """版本列表（恢复流程用），倒序。"""

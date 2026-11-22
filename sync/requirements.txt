@@ -1,7 +1,12 @@
 fastapi==0.115.6
-uvicorn==0.34.0
+# fastmcp 2.14.7 要求 uvicorn>=0.35
+uvicorn==0.35.0
 asyncpg==0.30.0
-# M3 再挂：fastmcp==2.8.0（streamable HTTP，钉版本）
+# M3：MCP 只读挂载（streamable HTTP，钉在 2.x 最新）；
+# starlette/sse-starlette 与 fastapi 0.115.x（starlette<0.42）联合解析的固定解
+fastmcp==2.14.7
+starlette==0.41.3
+sse-starlette==2.2.1
 httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.0

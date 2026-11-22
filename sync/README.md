@@ -11,7 +11,7 @@
 
 - [x] M1：sync 核心 + 镜像 + 去重/熔断 + versions/export/meta —— 已在服务器通过集成冒烟
 - [x] M2：只读接口 categories/transactions/stats + 口径 golden 对账 —— 已在服务器通过集成验收
-- [ ] M3：MCP 挂载 + 上线
+- [x] M3：MCP 只读挂载（`/mcp`，READ_KEY 鉴权）—— 与 M2 同一数据层，已在服务器通过集成验收
 
 ## 接口一览
 
@@ -28,6 +28,29 @@
 
 未带 key、key 错误、SYNC/READ 混用一律 401，不区分原因。统计口径与 App Room SQL 对齐，
 golden fixture（`dev/tests/sync/fixtures/query_cases.json`）是双端对账的裁判。
+
+## MCP 只读挂载（给 AI 助手）
+
+同一个服务在 `/mcp` 暴露 MCP（streamable HTTP，无状态模式），把 meta / 分类 / 明细 /
+统计四个只读查询包装成 MCP 工具，数据层与上表 HTTP 接口完全相同（`app/mcp_server.py`
+只调 `queries.py`，统计口径只有一份）。不提供推送、导出历史版本、force 或任何写能力。
+
+AI 客户端配置示例（URL 换成自己的反代入口）：
+
+```json
+{
+  "mcpServers": {
+    "jianji": {
+      "url": "https://<域名>/jianji/mcp",
+      "headers": { "Authorization": "Bearer <READ_KEY>" }
+    }
+  }
+}
+```
+
+鉴权只用 `READ_KEY`；无 key、SYNC_KEY、错误 key 一律 401，与 HTTP API 响应一致。
+工具入参与 HTTP 约束相同：from/to 为 epoch day（1970-01-01 为 0）且跨度 ≤ 3700 天，
+pageSize ≤ 200，type 仅 EXPENSE/INCOME。
 
 ## 部署流程
 
@@ -97,7 +120,7 @@ img=$(docker compose images -q jianji-sync-app)
 # 服务端单元测试
 docker run --rm -v /opt/jianji-sync-tests:/t:ro -w /t "$img" python -m pytest /t -q
 
-# 集成冒烟：首推 → noop → 409 熔断 → force → 版本列表 → 导出一致 → meta
+# 集成冒烟：M1 推送链路 + M2 只读查询 + M3 MCP 挂载（见 smoke_http.py 头注）
 docker run --rm --network host -v /opt/jianji-sync-tests:/t:ro -w /t \
   -e DATABASE_URL="postgres://jianji:$POSTGRES_PASSWORD@127.0.0.1:5432/jianji" \
   -e SYNC_KEY="$SYNC_KEY" -e READ_KEY="$READ_KEY" \
@@ -116,3 +139,17 @@ curl -fsS http://127.0.0.1:8100/healthz
 ```
 
 升级前备份数据库卷：`docker run --rm -v jianji-sync-pgdata:/data -v $PWD:/backup alpine tar czf /backup/pgdata.tgz -C /data .`
+
+定期做恢复演练（验证备份真的可用；会重建数据卷，演练环境执行）：
+
+```bash
+docker compose down
+docker volume rm jianji-sync-pgdata
+docker volume create jianji-sync-pgdata
+docker run --rm -v jianji-sync-pgdata:/data -v $PWD:/backup alpine \
+  sh -c "cd /data && tar xzf /backup/pgdata.tgz"
+docker compose up -d
+curl -fsS http://127.0.0.1:8100/healthz   # 预期 {"ok": true}
+```
+
+日志与磁盘：uvicorn 访问日志只记方法与路径，不记请求体和 Authorization 头；快照正文不会进日志。磁盘占用主要看数据卷（`docker system df -v | grep jianji-sync`）与快照增长，长期运行后按存储空间评估保留版本数。
