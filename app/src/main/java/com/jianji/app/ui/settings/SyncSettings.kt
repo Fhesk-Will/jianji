@@ -55,6 +55,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jianji.app.AppContainer
 import com.jianji.app.JianJiApp
 import com.jianji.app.data.prefs.Settings
+import com.jianji.app.data.sync.PairOutcome
 import com.jianji.app.data.sync.RestoreOutcome
 import com.jianji.app.data.sync.SyncPushOutcome
 import com.jianji.app.data.sync.SyncServerUrl
@@ -92,6 +93,13 @@ data class VersionsUiState(
     val error: String? = null,
 )
 
+/** 保存配置弹窗的探测状态（M4：保存前必须先通过服务器配对探测）。 */
+data class ConfigSaveUi(
+    val probing: Boolean = false,
+    /** 服务器已被其他设备占用：等待用户放弃或「接管此服务器」。 */
+    val conflict: Boolean = false,
+)
+
 class SyncSettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     val settings: StateFlow<Settings> = container.settings.settings
@@ -111,6 +119,17 @@ class SyncSettingsViewModel(private val container: AppContainer) : ViewModel() {
     private val _msg = MutableStateFlow<String?>(null)
     val msg: StateFlow<String?> = _msg.asStateFlow()
 
+    private val _configSaveUi = MutableStateFlow(ConfigSaveUi())
+    val configSaveUi: StateFlow<ConfigSaveUi> = _configSaveUi.asStateFlow()
+
+    /** 配置已验证并保存的一次性事件：UI 消费后关闭弹窗。 */
+    private val _configSaved = MutableStateFlow(false)
+    val configSaved: StateFlow<Boolean> = _configSaved.asStateFlow()
+
+    /** 探测中暂存的用户输入：冲突后「接管」复用同一对地址与密钥。 */
+    private var pendingUrl: String = ""
+    private var pendingKey: String = ""
+
     fun setSyncEnabled(enabled: Boolean) {
         val current = settings.value
         if (enabled && (current.serverUrl.isBlank() || current.syncKey.isBlank())) {
@@ -118,39 +137,85 @@ class SyncSettingsViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
         viewModelScope.launch {
+            if (!enabled) container.sync.unpairOnDisable() // 关闭同步 = 解绑（M4）
             container.settings.setSyncEnabled(enabled)
             if (enabled) container.sync.kickAutoSync() else container.sync.cancelAutoSync()
         }
     }
 
-    /** 返回 true 表示校验通过并已提交保存；UI 可以关闭配置弹窗。 */
-    fun saveSyncConfig(rawServerUrl: String, rawSyncKey: String): Boolean {
+    /**
+     * 保存云同步配置（M4：先做配对探测，通过才真正保存）。
+     * 两项都留空表示清除配置（无需探测）；探测期间 [ConfigSaveUi.probing]。
+     */
+    fun saveSyncConfig(rawServerUrl: String, rawSyncKey: String) {
         val serverUrl = rawServerUrl.trim()
         val syncKey = rawSyncKey.trim()
         if (serverUrl.isBlank() != syncKey.isBlank()) {
             _msg.value = "服务器地址与同步密钥需同时填写；两项都留空表示清除配置"
-            return false
+            return
         }
         if (serverUrl.isBlank()) {
             viewModelScope.launch {
+                container.sync.unpairOnDisable() // 清除配置 = 解绑（M4）
                 container.settings.setSyncConfig("", "")
                 _msg.value = "已清除云同步配置"
             }
-            return true
+            _configSaved.value = true
+            return
         }
 
         val normalized = SyncServerUrl.normalize(serverUrl)
         if (normalized.isFailure) {
             _msg.value = "服务器地址无效：${normalized.exceptionOrNull()?.message ?: "格式错误"}"
-            return false
+            return
         }
 
-        viewModelScope.launch {
-            container.settings.setSyncConfig(normalized.getOrThrow(), syncKey)
-            _msg.value = "云同步配置已保存"
-            container.sync.kickAutoSync()
+        pendingUrl = normalized.getOrThrow()
+        pendingKey = syncKey
+        _configSaveUi.value = ConfigSaveUi(probing = true)
+        viewModelScope.launch { probeAndSave(takeover = false) }
+    }
+
+    /** 用户确认旧设备已停用，解除原配对并把本机设为同步设备。 */
+    fun takeoverServer() {
+        if (_configSaveUi.value.probing) return
+        _configSaveUi.update { it.copy(probing = true) }
+        viewModelScope.launch { probeAndSave(takeover = true) }
+    }
+
+    fun dismissConflict() {
+        _configSaveUi.value = ConfigSaveUi()
+    }
+
+    fun consumeConfigSaved() {
+        _configSaved.value = false
+    }
+
+    private suspend fun probeAndSave(takeover: Boolean) {
+        val outcome = if (takeover) {
+            container.sync.takeoverPairing(pendingUrl, pendingKey)
+        } else {
+            container.sync.probePairing(pendingUrl, pendingKey)
         }
-        return true
+        when (outcome) {
+            is PairOutcome.Allowed -> {
+                container.settings.setSyncConfig(pendingUrl, pendingKey)
+                _msg.value = "云同步配置已保存"
+                container.sync.kickAutoSync()
+                _configSaveUi.value = ConfigSaveUi()
+                _configSaved.value = true
+            }
+
+            is PairOutcome.Occupied -> {
+                _msg.value = "该服务器已与另一台设备配对，设置未保存"
+                _configSaveUi.value = ConfigSaveUi(conflict = true)
+            }
+
+            is PairOutcome.Failed -> {
+                _msg.value = outcome.failure.userMessage
+                _configSaveUi.update { it.copy(probing = false) }
+            }
+        }
     }
 
     // ---------- 版本列表与云端恢复 ----------
@@ -196,10 +261,14 @@ class SyncSettingsViewModel(private val container: AppContainer) : ViewModel() {
             val result = container.sync.pushNow(force)
             _msg.value = when (result) {
                 is SyncPushOutcome.Done ->
-                    if (result.status == "noop") {
-                        "账本没有变化，服务器仍为 v${result.version}"
-                    } else {
-                        "已备份到服务器，版本 v${result.version}"
+                    when {
+                        result.merged ->
+                            "已把本机与服务器账本合并备份，版本 v${result.version}"
+
+                        result.status == "noop" ->
+                            "账本没有变化，服务器仍为 v${result.version}"
+
+                        else -> "已备份到服务器，版本 v${result.version}"
                     }
 
                 is SyncPushOutcome.WipeSuspected -> "检测到疑似误清空，已暂停覆盖"
@@ -234,6 +303,8 @@ fun SyncSettingsGroup() {
     val versionsUi by vm.versionsUi.collectAsStateWithLifecycle()
     val restoreRunning by vm.restoreRunning.collectAsStateWithLifecycle()
     val msg by vm.msg.collectAsStateWithLifecycle()
+    val configSaveUi by vm.configSaveUi.collectAsStateWithLifecycle()
+    val configSaved by vm.configSaved.collectAsStateWithLifecycle()
 
     LaunchedEffect(msg) {
         msg?.let {
@@ -248,6 +319,13 @@ fun SyncSettingsGroup() {
     var serverUrl by remember(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
     var syncKey by remember(settings.syncKey) { mutableStateOf(settings.syncKey) }
     val configured = settings.serverUrl.isNotBlank() && settings.syncKey.isNotBlank()
+
+    LaunchedEffect(configSaved) {
+        if (configSaved) {
+            vm.consumeConfigSaved()
+            showConfig = false
+        }
+    }
 
     SyncCard("云同步") {
         SyncSwitchRow(
@@ -341,12 +419,39 @@ fun SyncSettingsGroup() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    if (vm.saveSyncConfig(serverUrl, syncKey)) showConfig = false
-                }) { Text("保存") }
+                TextButton(
+                    enabled = !configSaveUi.probing,
+                    onClick = { vm.saveSyncConfig(serverUrl, syncKey) },
+                ) { Text(if (configSaveUi.probing) "验证中…" else "保存") }
             },
             dismissButton = {
                 TextButton(onClick = { showConfig = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (configSaveUi.conflict) {
+        AlertDialog(
+            onDismissRequest = { vm.dismissConflict() },
+            title = { Text("服务器已与其他设备配对") },
+            text = {
+                Text(
+                    "该服务器已绑定另一台同步设备，本机不能保存这对地址与密钥，" +
+                        "否则两台设备会互相覆盖账本。\n\n" +
+                        "如果旧设备已停用，可以接管：解除原设备的绑定，并把本机设为同步设备。",
+                    fontSize = 13.sp,
+                    color = Ink,
+                    lineHeight = 21.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !configSaveUi.probing,
+                    onClick = { vm.takeoverServer() },
+                ) { Text(if (configSaveUi.probing) "处理中…" else "接管此服务器") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissConflict() }) { Text("放弃") }
             },
         )
     }

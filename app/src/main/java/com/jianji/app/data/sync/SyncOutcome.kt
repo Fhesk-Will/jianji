@@ -6,6 +6,8 @@ sealed interface SyncPushOutcome {
     data class Done(
         val status: String,
         val version: Long,
+        /** 换机合并：服务端把本机数据与镜像并集落版，App 需回拉全量收敛。 */
+        val merged: Boolean = false,
     ) : SyncPushOutcome
 
     /** 服务端熔断：只有用户确认后才能带 force=true 重传。 */
@@ -47,8 +49,23 @@ sealed class SyncFailure(val userMessage: String) {
     /** 恢复时目标版本已被滚动清理。 */
     data object VersionNotFound : SyncFailure("该版本已不存在，请刷新版本列表后重试")
 
+    /** M4 单客户端锁定：服务器已与其他设备配对。 */
+    data object ClientMismatch :
+        SyncFailure("服务器已与其他设备配对，无法在此设备上同步")
+
     class SnapshotInvalid(reason: String) :
         SyncFailure("云端快照校验失败：$reason")
+}
+
+/** 保存配置前的配对探测结果（M4）。 */
+sealed interface PairOutcome {
+    /** 可以保存：配对成功（新抢占或已是本设备），或旧服务端无配对概念（404）。 */
+    data object Allowed : PairOutcome
+
+    /** 服务器已被其他设备占用，不允许保存这一对地址与密钥。 */
+    data object Occupied : PairOutcome
+
+    data class Failed(val failure: SyncFailure) : PairOutcome
 }
 
 /** 服务端一个历史版本（GET /api/versions 的单条）。 */

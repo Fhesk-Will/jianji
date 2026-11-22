@@ -3,6 +3,8 @@ package com.jianji.app.data.sync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -11,7 +13,12 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** 最小 SnapshotV1 推送客户端；不记录请求体与密钥。 */
+/**
+ * 最小 SnapshotV1 推送客户端；不记录请求体与密钥。
+ *
+ * 所有 SYNC_KEY 请求带 X-Jianji-Client 身份头（M4 单客户端配对）；
+ * 服务端身份不一致返回 409 client_mismatch → [SyncFailure.ClientMismatch]。
+ */
 class SyncApiClient(
     private val connectTimeoutMs: Int = 15_000,
     private val readTimeoutMs: Int = 30_000,
@@ -20,9 +27,14 @@ class SyncApiClient(
     },
 ) {
 
+    companion object {
+        const val HEADER_CLIENT = "X-Jianji-Client"
+    }
+
     suspend fun push(
         serverUrl: String,
         syncKey: String,
+        clientId: String,
         payload: ByteArray,
         force: Boolean,
     ): SyncPushOutcome {
@@ -30,24 +42,37 @@ class SyncApiClient(
             return SyncPushOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
         }
         return withContext(Dispatchers.IO) {
-            pushBlocking(baseUrl, syncKey.trim(), payload, force)
+            pushBlocking(baseUrl, syncKey.trim(), clientId, payload, force)
         }
     }
 
-    suspend fun listVersions(serverUrl: String, syncKey: String): SyncVersionsOutcome {
+    suspend fun listVersions(
+        serverUrl: String,
+        syncKey: String,
+        clientId: String,
+    ): SyncVersionsOutcome {
         val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
             return SyncVersionsOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
         }
         return withContext(Dispatchers.IO) {
-            when (val res = getBlocking("$baseUrl/api/versions", syncKey.trim())) {
-                is GetResult.NetworkError ->
+            when (val res = getBlocking("$baseUrl/api/versions", syncKey.trim(), clientId)) {
+                is CallResult.NetworkError ->
                     SyncVersionsOutcome.Failed(SyncFailure.Network(res.cause))
 
-                is GetResult.Response ->
+                is CallResult.Response ->
                     when (res.code) {
                         HttpURLConnection.HTTP_OK ->
                             SyncResponseParser.parseVersions(res.body)?.let { SyncVersionsOutcome.Done(it) }
                                 ?: SyncVersionsOutcome.Failed(SyncFailure.BadResponse("版本列表格式不正确"))
+
+                        HttpURLConnection.HTTP_CONFLICT ->
+                            if (SyncResponseParser.isClientMismatch(res.body)) {
+                                SyncVersionsOutcome.Failed(SyncFailure.ClientMismatch)
+                            } else {
+                                SyncVersionsOutcome.Failed(
+                                    SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                                )
+                            }
 
                         else -> SyncVersionsOutcome.Failed(
                             SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
@@ -58,23 +83,37 @@ class SyncApiClient(
     }
 
     /** version 为 null 表示取服务器当前版本。 */
-    suspend fun export(serverUrl: String, syncKey: String, version: Long?): SyncExportOutcome {
+    suspend fun export(
+        serverUrl: String,
+        syncKey: String,
+        clientId: String,
+        version: Long?,
+    ): SyncExportOutcome {
         val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
             return SyncExportOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
         }
         return withContext(Dispatchers.IO) {
             val query = version?.let { "?version=$it" }.orEmpty()
-            when (val res = getBlocking("$baseUrl/api/export$query", syncKey.trim())) {
-                is GetResult.NetworkError ->
+            when (val res = getBlocking("$baseUrl/api/export$query", syncKey.trim(), clientId)) {
+                is CallResult.NetworkError ->
                     SyncExportOutcome.Failed(SyncFailure.Network(res.cause))
 
-                is GetResult.Response ->
+                is CallResult.Response ->
                     when (res.code) {
                         HttpURLConnection.HTTP_OK ->
                             SyncExportOutcome.Done(res.body.toByteArray())
 
                         HttpURLConnection.HTTP_NOT_FOUND ->
                             SyncExportOutcome.Failed(SyncFailure.VersionNotFound)
+
+                        HttpURLConnection.HTTP_CONFLICT ->
+                            if (SyncResponseParser.isClientMismatch(res.body)) {
+                                SyncExportOutcome.Failed(SyncFailure.ClientMismatch)
+                            } else {
+                                SyncExportOutcome.Failed(
+                                    SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                                )
+                            }
 
                         else -> SyncExportOutcome.Failed(
                             SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
@@ -84,16 +123,68 @@ class SyncApiClient(
         }
     }
 
-    private sealed interface GetResult {
-        data class Response(val code: Int, val body: String) : GetResult
-        data class NetworkError(val cause: IOException) : GetResult
+    /**
+     * 保存配置前的配对探测（M4）：
+     * [PairOutcome.Allowed] = 配对成功（新抢占或已是本设备），或旧服务端无 /api/pair（404）；
+     * [PairOutcome.Occupied] = 已被其他设备占用，不允许保存。
+     */
+    suspend fun pair(serverUrl: String, syncKey: String, clientId: String): PairOutcome {
+        val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
+            return PairOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
+        }
+        return withContext(Dispatchers.IO) {
+            val body = JsonObject(mapOf("clientId" to JsonPrimitive(clientId)))
+                .toString().encodeToByteArray()
+            when (val res = postBlocking("$baseUrl/api/pair", syncKey.trim(), clientId, body)) {
+                is CallResult.NetworkError ->
+                    PairOutcome.Failed(SyncFailure.Network(res.cause))
+
+                is CallResult.Response ->
+                    when (res.code) {
+                        HttpURLConnection.HTTP_OK -> PairOutcome.Allowed
+                        HttpURLConnection.HTTP_NOT_FOUND -> PairOutcome.Allowed
+                        HttpURLConnection.HTTP_CONFLICT ->
+                            if (SyncResponseParser.isClientMismatch(res.body)) {
+                                PairOutcome.Occupied
+                            } else {
+                                PairOutcome.Failed(
+                                    SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                                )
+                            }
+
+                        else -> PairOutcome.Failed(
+                            SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                        )
+                    }
+            }
+        }
     }
 
-    private fun getBlocking(url: String, syncKey: String): GetResult {
+    /** 解除服务器配对（接管流程第一步）；返回 null 表示成功。 */
+    suspend fun unpair(serverUrl: String, syncKey: String): SyncFailure? {
+        val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
+            return SyncFailure.InvalidServerUrl(it.message ?: "格式错误")
+        }
+        return withContext(Dispatchers.IO) {
+            when (val res = postBlocking("$baseUrl/api/unpair", syncKey.trim(), "", null)) {
+                is CallResult.NetworkError -> SyncFailure.Network(res.cause)
+                is CallResult.Response ->
+                    if (res.code == HttpURLConnection.HTTP_OK) null
+                    else SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body))
+            }
+        }
+    }
+
+    private sealed interface CallResult {
+        data class Response(val code: Int, val body: String) : CallResult
+        data class NetworkError(val cause: IOException) : CallResult
+    }
+
+    private fun getBlocking(url: String, syncKey: String, clientId: String): CallResult {
         val connection = try {
             openConnection(url)
         } catch (e: IOException) {
-            return GetResult.NetworkError(e)
+            return CallResult.NetworkError(e)
         }
 
         try {
@@ -104,30 +195,30 @@ class SyncApiClient(
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Authorization", "Bearer $syncKey")
+                if (clientId.isNotBlank()) setRequestProperty(HEADER_CLIENT, clientId)
             }
 
             val code = try {
                 connection.responseCode
             } catch (e: IOException) {
-                return GetResult.NetworkError(e)
+                return CallResult.NetworkError(e)
             }
-            return GetResult.Response(code, readBody(connection, code))
+            return CallResult.Response(code, readBody(connection, code))
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun pushBlocking(
-        baseUrl: String,
+    private fun postBlocking(
+        url: String,
         syncKey: String,
-        payload: ByteArray,
-        force: Boolean,
-    ): SyncPushOutcome {
-        val query = if (force) "?force=true" else ""
+        clientId: String,
+        body: ByteArray?,
+    ): CallResult {
         val connection = try {
-            openConnection("$baseUrl/api/sync$query")
+            openConnection(url)
         } catch (e: IOException) {
-            return SyncPushOutcome.Failed(SyncFailure.Network(e))
+            return CallResult.NetworkError(e)
         }
 
         try {
@@ -136,52 +227,74 @@ class SyncApiClient(
                 readTimeout = readTimeoutMs
                 instanceFollowRedirects = false
                 requestMethod = "POST"
-                doOutput = true
                 setRequestProperty("Accept", "application/json")
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Authorization", "Bearer $syncKey")
-                setFixedLengthStreamingMode(payload.size)
+                if (clientId.isNotBlank()) setRequestProperty(HEADER_CLIENT, clientId)
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setFixedLengthStreamingMode(body.size)
+                }
             }
 
-            try {
-                connection.outputStream.use { it.write(payload) }
-            } catch (e: IOException) {
-                return SyncPushOutcome.Failed(SyncFailure.Network(e))
+            if (body != null) {
+                try {
+                    connection.outputStream.use { it.write(body) }
+                } catch (e: IOException) {
+                    return CallResult.NetworkError(e)
+                }
             }
 
             val code = try {
                 connection.responseCode
             } catch (e: IOException) {
-                return SyncPushOutcome.Failed(SyncFailure.Network(e))
+                return CallResult.NetworkError(e)
             }
-            val body = readBody(connection, code)
-
-            return when (code) {
-                HttpURLConnection.HTTP_OK -> {
-                    runCatching { SyncResponseParser.parsePush(body) }
-                        .getOrElse {
-                            SyncPushOutcome.Failed(SyncFailure.BadResponse("同步结果格式不正确"))
-                        }
-                }
-
-                HttpURLConnection.HTTP_CONFLICT -> {
-                    SyncResponseParser.parseWipeSuspected(body)?.let { wipe ->
-                        SyncPushOutcome.WipeSuspected(
-                            currentLiveCount = wipe.currentLiveCount,
-                            incomingLiveCount = wipe.incomingLiveCount,
-                            hint = wipe.hint,
-                        )
-                    } ?: SyncPushOutcome.Failed(
-                        SyncFailure.Http(code, SyncResponseParser.errorMessage(body)),
-                    )
-                }
-
-                else -> SyncPushOutcome.Failed(
-                    SyncFailure.Http(code, SyncResponseParser.errorMessage(body)),
-                )
-            }
+            return CallResult.Response(code, readBody(connection, code))
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun pushBlocking(
+        baseUrl: String,
+        syncKey: String,
+        clientId: String,
+        payload: ByteArray,
+        force: Boolean,
+    ): SyncPushOutcome {
+        val query = if (force) "?force=true" else ""
+        return when (val res = postBlocking("$baseUrl/api/sync$query", syncKey, clientId, payload)) {
+            is CallResult.NetworkError -> SyncPushOutcome.Failed(SyncFailure.Network(res.cause))
+
+            is CallResult.Response ->
+                when (res.code) {
+                    HttpURLConnection.HTTP_OK ->
+                        runCatching { SyncResponseParser.parsePush(res.body) }
+                            .getOrElse {
+                                SyncPushOutcome.Failed(SyncFailure.BadResponse("同步结果格式不正确"))
+                            }
+
+                    HttpURLConnection.HTTP_CONFLICT -> {
+                        SyncResponseParser.parseWipeSuspected(res.body)?.let { wipe ->
+                            SyncPushOutcome.WipeSuspected(
+                                currentLiveCount = wipe.currentLiveCount,
+                                incomingLiveCount = wipe.incomingLiveCount,
+                                hint = wipe.hint,
+                            )
+                        } ?: if (SyncResponseParser.isClientMismatch(res.body)) {
+                            SyncPushOutcome.Failed(SyncFailure.ClientMismatch)
+                        } else {
+                            SyncPushOutcome.Failed(
+                                SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                            )
+                        }
+                    }
+
+                    else -> SyncPushOutcome.Failed(
+                        SyncFailure.Http(res.code, SyncResponseParser.errorMessage(res.body)),
+                    )
+                }
         }
     }
 
@@ -202,7 +315,8 @@ internal object SyncResponseParser {
         val status = root["status"]?.jsonPrimitive?.content
         require(status == "ok" || status == "noop") { "未知同步状态：$status" }
         val version = root["version"]?.jsonPrimitive?.long ?: error("缺少 version")
-        return SyncPushOutcome.Done(status, version)
+        val merged = root["merged"]?.jsonPrimitive?.content == "true"
+        return SyncPushOutcome.Done(status, version, merged)
     }
 
     data class Wipe(
@@ -216,7 +330,7 @@ internal object SyncResponseParser {
         root["versions"]?.jsonArray?.map { item ->
             val obj = item.jsonObject
             SyncVersion(
-                version = obj["version"]!!.jsonPrimitive.long,
+                version = obj["version"]!!.jsonPrimitive.content.toLong(),
                 recordCount = obj["recordCount"]!!.jsonPrimitive.content.toInt(),
                 liveCount = obj["liveCount"]!!.jsonPrimitive.content.toInt(),
                 createdAtEpochMs = obj["createdAt"]?.jsonPrimitive?.content
@@ -235,6 +349,12 @@ internal object SyncResponseParser {
             hint = detail["hint"]?.jsonPrimitive?.content.orEmpty(),
         )
     }.getOrNull()
+
+    /** 409 且 detail.code == client_mismatch（M4 单客户端锁定）。 */
+    fun isClientMismatch(body: String): Boolean = runCatching {
+        json.parseToJsonElement(body).jsonObject["detail"]?.jsonObject
+            ?.get("code")?.jsonPrimitive?.content == "client_mismatch"
+    }.getOrDefault(false)
 
     fun errorMessage(body: String): String? = runCatching {
         if (body.isBlank()) return null

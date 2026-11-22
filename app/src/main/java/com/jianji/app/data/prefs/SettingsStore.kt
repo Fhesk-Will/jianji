@@ -7,7 +7,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.jianji.app.data.model.RecordType
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
@@ -18,6 +20,8 @@ data class Settings(
     val syncEnabled: Boolean = false,
     val serverUrl: String = "",
     val syncKey: String = "",
+    /** M4 配对设备身份；空串表示尚未生成，由 ensureClientId 惰性创建。 */
+    val clientId: String = "",
 ) {
     fun recentCategoryIds(type: RecordType): List<String> =
         if (type == RecordType.EXPENSE) recentExpenseCategoryIds else recentIncomeCategoryIds
@@ -33,6 +37,7 @@ class SettingsStore(private val context: Context) {
         val SYNC_ENABLED = booleanPreferencesKey("sync_enabled")
         val SERVER_URL = stringPreferencesKey("sync_server_url")
         val SYNC_KEY = stringPreferencesKey("sync_key")
+        val CLIENT_ID = stringPreferencesKey("sync_client_id")
     }
 
     val settings: Flow<Settings> = context.dataStore.data.map { p ->
@@ -43,7 +48,17 @@ class SettingsStore(private val context: Context) {
             syncEnabled = p[Keys.SYNC_ENABLED] ?: false,
             serverUrl = p[Keys.SERVER_URL].orEmpty(),
             syncKey = p[Keys.SYNC_KEY].orEmpty(),
+            clientId = p[Keys.CLIENT_ID].orEmpty(),
         )
+    }
+
+    /** 同步设备身份（M4 配对用）：首次调用生成 UUID 并持久化，之后原样返回。 */
+    suspend fun ensureClientId(): String {
+        val existing = settings.first().clientId
+        if (existing.isNotBlank()) return existing
+        val created = UUID.randomUUID().toString()
+        context.dataStore.edit { it[Keys.CLIENT_ID] = created }
+        return created
     }
 
     suspend fun setAppLock(v: Boolean) {

@@ -26,16 +26,32 @@ data class SyncStatus(
     val autoPaused: Boolean = false,
 )
 
-private data class SyncConfig(val serverUrl: String, val syncKey: String)
+private data class SyncConfig(
+    val serverUrl: String,
+    val syncKey: String,
+    /** M4 配对设备身份，所有 SYNC_KEY 请求带此身份头。 */
+    val clientId: String,
+)
 
 /**
- * 云同步入口：手动/自动上传、版本列表、云端恢复。
+ * 云同步入口：手动/自动上传、版本列表、云端恢复、配对探测（M4）。
  *
  * 串行化约定：上传与恢复共用 [mutex]，自动同步的退避重试也走同一互斥，
  * 任何时刻只有一个网络操作在执行；恢复内部推送回滚点不再二次取锁。
  *
  * 自动同步约定：App 侧只按"内容指纹变化 + 去抖"触发，相同内容由服务端去重成 noop；
  * 网络错误有限次数指数退避，401/400 等永久错误不重试；wipe_suspected 暂停自动上传。
+ *
+ * 单客户端配对（M4）：服务器只接受一台同步设备。保存配置前必须先 [probePairing]
+ * 探测成功（或旧服务端无 /api/pair）；身份不一致的同步请求会得到
+ * [SyncFailure.ClientMismatch]，自动重试不会覆盖它。
+ *
+ * 换机合并：新配对设备（接管/重装）的首次推送，服务端把本机数据与镜像按 id 并集
+ * 合并落版并回 merged 标记——服务器旧数据不丢。这里随即回拉合并后的全量替换本地，
+ * 完成两端收敛；回拉失败则本次不算成功（指纹不前进），下次同步自动重试。
+ *
+ * 关闭同步即解绑：关闭开关或清除配置时调用 [unpairOnDisable]，服务器立刻允许
+ * 其他设备配对；失败不阻塞本地关闭（用户可在新设备上「接管」）。
  */
 class CloudSyncManager(
     private val repo: LedgerRepository,
@@ -69,11 +85,67 @@ class CloudSyncManager(
         pushLocked(config, force)
     }
 
+    // ---------- 配对探测（保存配置前置条件，M4） ----------
+
+    /**
+     * 保存服务器配置前的配对探测：可以保存返回 [PairOutcome.Allowed]
+     * （配对成功，或旧服务端无 /api/pair 按未启用配对处理）；
+     * 被其他设备占用返回 [PairOutcome.Occupied]，调用方应拒绝保存。
+     */
+    suspend fun probePairing(serverUrl: String, syncKey: String): PairOutcome {
+        val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
+            return PairOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
+        }
+        return client.pair(baseUrl, syncKey.trim(), settings.ensureClientId())
+    }
+
+    /** 接管此服务器：解除原设备配对后重新探测配对（旧设备已停用场景）。 */
+    suspend fun takeoverPairing(serverUrl: String, syncKey: String): PairOutcome {
+        val baseUrl = SyncServerUrl.normalize(serverUrl).getOrElse {
+            return PairOutcome.Failed(SyncFailure.InvalidServerUrl(it.message ?: "格式错误"))
+        }
+        client.unpair(baseUrl, syncKey.trim())?.let { return PairOutcome.Failed(it) }
+        return probePairing(serverUrl, syncKey)
+    }
+
+    /**
+     * 关闭同步即解绑（M4）：解除服务器上的设备配对，让其他设备可以立刻配对。
+     * 最佳努力——失败不抛错（断网时配对留在服务器侧，新设备仍可「接管」）。
+     */
+    suspend fun unpairOnDisable() {
+        val cfg = settings.settings.first()
+        val serverUrl = SyncServerUrl.normalize(cfg.serverUrl).getOrNull() ?: return
+        if (cfg.syncKey.isBlank()) return
+        runCatching { client.unpair(serverUrl, cfg.syncKey.trim()) }
+    }
+
+    /**
+     * 换机合并后的收敛：回拉合并版本替换本地，并让同步基准前进到合并内容。
+     * 返回 null 表示成功；失败时同步基准不前进（pending 保留），下次同步自动重试。
+     */
+    private suspend fun convergeMerged(config: SyncConfig, version: Long): SyncFailure? {
+        val payload = when (
+            val res = client.export(config.serverUrl, config.syncKey, config.clientId, version)
+        ) {
+            is SyncExportOutcome.Done -> res.payload
+            is SyncExportOutcome.Failed -> return res.failure
+        }
+        val snapshot = runCatching { SnapshotCodec.decode(payload) }.getOrElse {
+            return SyncFailure.SnapshotInvalid("JSON 解析失败")
+        }
+        val (records, categories) = runCatching { SnapshotCodec.toEntities(snapshot) }.getOrElse {
+            return SyncFailure.SnapshotInvalid("记录或分类字段非法")
+        }
+        repo.restoreLedger(records, categories)
+        lastSyncedFingerprint = SnapshotCodec.fingerprint(records, categories)
+        return null
+    }
+
     // ---------- 版本列表与云端恢复 ----------
 
     suspend fun listVersions(): SyncVersionsOutcome {
         val config = loadConfig() ?: return SyncVersionsOutcome.Failed(SyncFailure.NotConfigured)
-        return client.listVersions(config.serverUrl, config.syncKey)
+        return client.listVersions(config.serverUrl, config.syncKey, config.clientId)
     }
 
     /**
@@ -98,7 +170,7 @@ class CloudSyncManager(
         }
 
         // 2. 下载目标版本
-        val payload = when (val res = client.export(config.serverUrl, config.syncKey, version)) {
+        val payload = when (val res = client.export(config.serverUrl, config.syncKey, config.clientId, version)) {
             is SyncExportOutcome.Done -> res.payload
             is SyncExportOutcome.Failed -> return RestoreOutcome.Failed(res.failure)
         }
@@ -209,12 +281,11 @@ class CloudSyncManager(
         val cfg = settings.settings.first()
         if (!cfg.syncEnabled || cfg.syncKey.isBlank()) return null
         val serverUrl = SyncServerUrl.normalize(cfg.serverUrl).getOrNull() ?: return null
-        return SyncConfig(serverUrl, cfg.syncKey.trim())
+        return SyncConfig(serverUrl, cfg.syncKey.trim(), settings.ensureClientId())
     }
 
     /** 调用方必须已持有 [mutex]。成功后更新同步基准与状态。 */
-    private suspend fun pushLocked(config: SyncConfig, force: Boolean): SyncPushOutcome {
-        _status.update { it.copy(running = true) }
+    private suspend fun pushLocked(config: SyncConfig, force: Boolean): SyncPushOutcome {        _status.update { it.copy(running = true) }
         val records = repo.snapshotRecords()
         val categories = repo.snapshotCategories()
         val snapshot = SnapshotCodec.build(
@@ -223,9 +294,23 @@ class CloudSyncManager(
             exportedAtEpochMs = System.currentTimeMillis(),
         )
         val fingerprint = SnapshotCodec.fingerprint(records, categories)
-        return when (val outcome = client.push(config.serverUrl, config.syncKey, SnapshotCodec.encode(snapshot), force)) {
+        return when (
+            val outcome = client.push(
+                config.serverUrl, config.syncKey, config.clientId,
+                SnapshotCodec.encode(snapshot), force,
+            )
+        ) {
             is SyncPushOutcome.Done -> {
-                lastSyncedFingerprint = fingerprint
+                if (outcome.merged) {
+                    // 换机合并：回拉合并后的全量让本机收敛；失败则指纹不前进，下次自动重试
+                    val convergeFailure = convergeMerged(config, outcome.version)
+                    if (convergeFailure != null) {
+                        _status.update { it.copy(running = false, failure = convergeFailure) }
+                        return SyncPushOutcome.Failed(convergeFailure)
+                    }
+                } else {
+                    lastSyncedFingerprint = fingerprint
+                }
                 _status.update {
                     it.copy(
                         running = false,
