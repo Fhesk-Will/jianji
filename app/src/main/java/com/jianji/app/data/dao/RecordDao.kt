@@ -160,6 +160,17 @@ interface RecordDao {
     @Query("SELECT * FROM records")
     suspend fun snapshot(): List<RecordEntity>
 
+    /** 全量快照流：账本任何变化（含恢复、墓碑）都会重新发射，自动同步观察用。 */
+    @Query("SELECT * FROM records")
+    fun snapshotFlow(): Flow<List<RecordEntity>>
+
+    @Query("SELECT COUNT(*) FROM records WHERE isDeleted = 0")
+    suspend fun liveCount(): Int
+
+    /** 云恢复：先清后插，必须与分类清空在同一事务内（见 LedgerRepository.restoreLedger）。 */
+    @Query("DELETE FROM records")
+    suspend fun deleteAll()
+
     @Query(
         """
         SELECT r.id AS id, r.type AS type, r.amountMinor AS amountMinor,

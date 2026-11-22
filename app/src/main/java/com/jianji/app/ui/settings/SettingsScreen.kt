@@ -252,6 +252,8 @@ fun SettingsScreen(
             IconRow(Icons.Filled.Category, "分类管理", "支出 8 · 收入 7", onClick = onCategories)
         }
 
+        SyncSettingsGroup()
+
         GroupCard("数据") {
             IconRow(
                 icon = Icons.Filled.FileDownload,
@@ -285,7 +287,7 @@ fun SettingsScreen(
             IconRow(
                 icon = Icons.Filled.Info,
                 title = "版本",
-                sub = "${BuildConfig.VERSION_NAME} · 本地优先 · 无服务器",
+                sub = "${BuildConfig.VERSION_NAME} · 本地优先 · 云同步可选",
                 onClick = null,
             )
         }

@@ -1,5 +1,6 @@
 package com.jianji.app.data.repository
 
+import androidx.room.withTransaction
 import com.jianji.app.data.DefaultCategories
 import com.jianji.app.data.dao.CategoryTotal
 import com.jianji.app.data.dao.DailyCategoryTotal
@@ -229,5 +230,28 @@ class LedgerRepository(private val db: AppDatabase) {
 
     suspend fun csvRows(fromDay: Int, toDay: Int) = recordDao.csvRows(fromDay, toDay)
 
+    /** 云同步全量快照（含软删除墓碑）。 */
+    suspend fun snapshotRecords(): List<RecordEntity> = recordDao.snapshot()
+
     suspend fun snapshotCategories(): List<CategoryEntity> = categoryDao.snapshot()
+
+    fun recordsSnapshotFlow(): Flow<List<RecordEntity>> = recordDao.snapshotFlow()
+
+    fun categoriesSnapshotFlow(): Flow<List<CategoryEntity>> = categoryDao.snapshotFlow()
+
+    suspend fun liveRecordCount(): Int = recordDao.liveCount()
+
+    /**
+     * 云恢复：以目标云端版本替换本地账本（不是按 id 合并）。
+     * 清表 + 插入在同一 Room 事务中，中断只会整体回滚，不会留下半套数据；
+     * 设置项、服务器地址与密钥不在这两表里，天然不受影响。
+     */
+    suspend fun restoreLedger(records: List<RecordEntity>, categories: List<CategoryEntity>) {
+        db.withTransaction {
+            recordDao.deleteAll()
+            categoryDao.deleteAll()
+            recordDao.upsertAll(records)
+            categoryDao.upsertAll(categories)
+        }
+    }
 }

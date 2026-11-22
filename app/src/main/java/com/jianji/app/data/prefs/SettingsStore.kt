@@ -15,6 +15,9 @@ data class Settings(
     val appLock: Boolean = false,
     val recentExpenseCategoryIds: List<String> = emptyList(),
     val recentIncomeCategoryIds: List<String> = emptyList(),
+    val syncEnabled: Boolean = false,
+    val serverUrl: String = "",
+    val syncKey: String = "",
 ) {
     fun recentCategoryIds(type: RecordType): List<String> =
         if (type == RecordType.EXPENSE) recentExpenseCategoryIds else recentIncomeCategoryIds
@@ -27,6 +30,9 @@ class SettingsStore(private val context: Context) {
         val APP_LOCK = booleanPreferencesKey("app_lock")
         val RECENT_EXPENSE = stringPreferencesKey("recent_expense_categories")
         val RECENT_INCOME = stringPreferencesKey("recent_income_categories")
+        val SYNC_ENABLED = booleanPreferencesKey("sync_enabled")
+        val SERVER_URL = stringPreferencesKey("sync_server_url")
+        val SYNC_KEY = stringPreferencesKey("sync_key")
     }
 
     val settings: Flow<Settings> = context.dataStore.data.map { p ->
@@ -34,11 +40,33 @@ class SettingsStore(private val context: Context) {
             appLock = p[Keys.APP_LOCK] ?: false,
             recentExpenseCategoryIds = p[Keys.RECENT_EXPENSE].toRecentIds(),
             recentIncomeCategoryIds = p[Keys.RECENT_INCOME].toRecentIds(),
+            syncEnabled = p[Keys.SYNC_ENABLED] ?: false,
+            serverUrl = p[Keys.SERVER_URL].orEmpty(),
+            syncKey = p[Keys.SYNC_KEY].orEmpty(),
         )
     }
 
     suspend fun setAppLock(v: Boolean) {
         context.dataStore.edit { it[Keys.APP_LOCK] = v }
+    }
+
+    suspend fun setSyncEnabled(v: Boolean) {
+        context.dataStore.edit { it[Keys.SYNC_ENABLED] = v }
+    }
+
+    /** 保存完整云同步配置；两项都为空表示清除配置，配置完整时自动开启同步。 */
+    suspend fun setSyncConfig(serverUrl: String, syncKey: String) {
+        context.dataStore.edit { p ->
+            if (serverUrl.isBlank() && syncKey.isBlank()) {
+                p.remove(Keys.SERVER_URL)
+                p.remove(Keys.SYNC_KEY)
+                p[Keys.SYNC_ENABLED] = false
+            } else {
+                p[Keys.SERVER_URL] = serverUrl.trim()
+                p[Keys.SYNC_KEY] = syncKey.trim()
+                p[Keys.SYNC_ENABLED] = true
+            }
+        }
     }
 
     /** 成功保存记录后更新最近使用；收支各保留最多两排（8 个） */

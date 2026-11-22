@@ -8,7 +8,7 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// ---- 发布版本号：由 scripts/release.ps1 通过 -P 传入；gradle.properties 仅作兜底 ----
+// ---- 发布版本号：由 dev/scripts/release.ps1 通过 -P 传入；gradle.properties 仅作兜底 ----
 //   正式出包：-PjianjiVersionName=2026.11.11.1 -PjianjiVersionCode=2026111101
 //   直接跑 gradlew（IDE / 临时验证）：回退到 gradle.properties 的 releaseVersionDate / releaseVersionSeq
 val overrideVersionName = providers.gradleProperty("jianjiVersionName").orNull
@@ -67,6 +67,14 @@ android {
         versionName = derivedVersionName
     }
 
+    // 本地开发测试统一放在 dev/（Git 忽略）；服务端 golden fixture 只保留一份。
+    sourceSets {
+        getByName("test") {
+            java.srcDir(rootProject.file("dev/tests/app/java"))
+            resources.srcDir(rootProject.file("dev/tests/sync/fixtures"))
+        }
+    }
+
     signingConfigs {
         if (keystoreProblem == null) {
             create("release") {
@@ -104,6 +112,11 @@ android {
 
     lint {
         checkReleaseBuilds = false   // 个人项目：跳过 release lint，出包提速
+    }
+
+    testOptions {
+        // Room golden 测试走 Robolectric，需要资源参与单元测试（仅 test，不进包体）
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -159,5 +172,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)          // Room golden 测试（仅测试，不进包体）
+    testImplementation(libs.androidx.test.core)   // ApplicationProvider
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

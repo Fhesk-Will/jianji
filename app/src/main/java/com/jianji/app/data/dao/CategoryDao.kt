@@ -40,6 +40,14 @@ interface CategoryDao {
     @Query("SELECT * FROM categories")
     suspend fun snapshot(): List<CategoryEntity>
 
+    /** 全量快照流，自动同步观察用。 */
+    @Query("SELECT * FROM categories")
+    fun snapshotFlow(): Flow<List<CategoryEntity>>
+
+    /** 云恢复：先清后插，必须与记录清空在同一事务内（见 LedgerRepository.restoreLedger）。 */
+    @Query("DELETE FROM categories")
+    suspend fun deleteAll()
+
     @Update
     suspend fun updateOrder(categories: List<CategoryEntity>)
 
