@@ -12,6 +12,7 @@
 - [x] M1：sync 核心 + 镜像 + 去重/熔断 + versions/export/meta —— 已在服务器通过集成冒烟
 - [x] M2：只读接口 categories/transactions/stats + 口径 golden 对账 —— 已在服务器通过集成验收
 - [x] M3：MCP 只读挂载（`/mcp`，READ_KEY 鉴权）—— 与 M2 同一数据层，已在服务器通过集成验收
+- [x] M4：单客户端配对锁定（`/api/pair`、`/api/unpair`，写接口身份守卫）—— 已在服务器通过集成验收
 
 ## 接口一览
 
@@ -21,6 +22,8 @@
 | --- | --- | --- |
 | `POST /sync?force=` | SYNC | 推送全量快照（409 = 疑似误删熔断） |
 | `GET /versions` / `GET /export?version=` | SYNC | 版本列表 / 按版本导出（App 恢复用） |
+| `POST /pair` | SYNC | 客户端配对探测（保存配置时调用；被占 409） |
+| `POST /unpair` | SYNC | 解除配对（App「接管此服务器」/ 重装救急） |
 | `GET /meta` | READ | 版本、计数、最新业务日期 |
 | `GET /categories?includeDeleted=` | READ | 分类清单，排序同 App（type, sortOrder, name） |
 | `GET /transactions?from=&to=&type=&keyword=&categoryIds=&page=&pageSize=` | READ | 明细分页（date/createdAt 倒序，pageSize ≤ 200，区间 ≤ 3700 天） |
@@ -28,6 +31,35 @@
 
 未带 key、key 错误、SYNC/READ 混用一律 401，不区分原因。统计口径与 App Room SQL 对齐，
 golden fixture（`dev/tests/sync/fixtures/query_cases.json`）是双端对账的裁判。
+
+## 单客户端配对（M4）
+
+一台数据同步服务器在同一时刻只接受一台同步设备。App 保存服务器与密钥时先调用
+`POST /api/pair`（body `{"clientId"}`，身份为本机生成的 UUID）探测：未配对则抢占，
+已是本设备同样成功，被其他设备占用返回 409 `client_mismatch`——App 据此拒绝保存。
+旧服务端没有 `/api/pair` 时按 404 处理，视为未启用配对，照常保存。
+
+之后 `POST /sync`、`GET /versions`、`GET /export` 三个写接口都要求身份一致：
+请求头 `X-Jianji-Client` 与配对记录相同才放行；未配对时首个写请求自动抢占
+（不带身份头的旧 App 记为 `legacy`，同样占坑），身份不一致一律 409 `client_mismatch`。
+并发抢占由单行表主键（`id = 1`）+ `INSERT ... ON CONFLICT DO NOTHING` 保证只有一个成功。
+
+`POST /api/unpair`（SYNC_KEY 鉴权）解除配对，用于 App「接管此服务器」（先 unpair 再 pair）
+与重装救急；解除后首个写请求或 `/api/pair` 可重新抢占。**解除配对只删除配对行，
+账本数据（快照历史与镜像）完全不受影响。** READ_KEY 只读通道
+（meta/categories/transactions/stats/MCP）不参与配对——AI 查询不是同步设备。
+
+关闭同步即解绑：App 关闭同步开关或清除配置时自动调用 `/api/unpair`（最佳努力，
+断网失败不阻塞本地关闭，新设备仍可「接管」），服务器立刻可被其他设备配对。
+
+### 换机合并
+
+新配对设备（接管/重装后的首次推送）不与镜像整本替换，而是按 id 并集合并：
+同 id 取 `updatedAtEpochMs` 较大者（平局取传入），墓碑随记录走、删除不会被复活——
+服务器旧数据不丢，本机新数据并进去，响应带 `merged: true`。App 随即回拉合并版本
+替换本地完成两端收敛；收敛前重复推送返回 `noop + merged`（不动库），收敛后自动
+转正常整本替换。判定用内容指纹（与列表顺序、updatedAt 无关）：传入已全量则正常
+落版清待办，合并结果与当前版本一致则 noop 等回拉。
 
 ## MCP 只读挂载（给 AI 助手）
 
@@ -120,7 +152,7 @@ img=$(docker compose images -q jianji-sync-app)
 # 服务端单元测试
 docker run --rm -v /opt/jianji-sync-tests:/t:ro -w /t "$img" python -m pytest /t -q
 
-# 集成冒烟：M1 推送链路 + M2 只读查询 + M3 MCP 挂载（见 smoke_http.py 头注）
+# 集成冒烟：M1 推送链路 + M2 只读查询 + M3 MCP 挂载 + M4 设备配对（见 smoke_http.py 头注）
 docker run --rm --network host -v /opt/jianji-sync-tests:/t:ro -w /t \
   -e DATABASE_URL="postgres://jianji:$POSTGRES_PASSWORD@127.0.0.1:5432/jianji" \
   -e SYNC_KEY="$SYNC_KEY" -e READ_KEY="$READ_KEY" \

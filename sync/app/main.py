@@ -1,10 +1,15 @@
 """FastAPI 入口：鉴权、路由装配、生命周期。
 
 鉴权（docs §5）：
-  - Bearer SYNC_KEY → 写路径：POST /api/sync、GET /api/export、GET /api/versions
+  - Bearer SYNC_KEY → 写路径：POST /api/sync、GET /api/export、GET /api/versions、
+    POST /api/pair、POST /api/unpair；写路径同时要求客户端身份与配对记录一致（阶段 6）
   - Bearer READ_KEY → 读路径：GET /api/meta、GET /api/categories、
-    GET /api/transactions、GET /api/stats，以及 /mcp（MCP 只读挂载）
+    GET /api/transactions、GET /api/stats，以及 /mcp（MCP 只读挂载，不参与配对）
   - 401 统一 {"detail": "unauthorized"}，不区分 key 类型（不泄露信息）
+
+客户端配对（M4）：数据服务器最多只允许一台同步设备。SYNC_KEY 写接口携带
+X-Jianji-Client 身份头；未配对时首个请求自动抢占（缺省身份 "legacy" 兼容旧 App），
+之后身份不一致一律 409 {"detail": {"code": "client_mismatch", ...}}。
 """
 
 from contextlib import asynccontextmanager
@@ -12,9 +17,10 @@ import json
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import mcp_server, queries, sync
+from . import mcp_server, pairing, queries, sync
 from .config import config
 from .db import pool as dbpool
 
@@ -32,6 +38,20 @@ def _auth(expected: str):
 
 def _bad_params(e: queries.ParamError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(e))
+
+
+def _client_mismatch(e: pairing.ClientMismatch) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": "client_mismatch", "hint": e.hint},
+    )
+
+
+async def _guard_client(request: Request) -> None:
+    """SYNC_KEY 写接口的配对守卫（见模块 docstring）。Raises ClientMismatch。"""
+    await pairing.claim_or_check(
+        await dbpool.pool(), request.headers.get(pairing.HEADER)
+    )
 
 
 class _ReadKeyGuard:
@@ -118,6 +138,10 @@ async def healthz() -> dict:
 
 @app.post("/api/sync", dependencies=[Depends(require_sync_key)])
 async def api_sync(request: Request, force: bool = Query(default=False)) -> dict:
+    try:
+        await _guard_client(request)
+    except pairing.ClientMismatch as e:
+        raise _client_mismatch(e)
     raw = await request.body()
     if len(raw) > config.snapshot_max_bytes:
         raise HTTPException(
@@ -141,12 +165,20 @@ async def api_sync(request: Request, force: bool = Query(default=False)) -> dict
 
 
 @app.get("/api/versions", dependencies=[Depends(require_sync_key)])
-async def api_versions() -> dict:
+async def api_versions(request: Request) -> dict:
+    try:
+        await _guard_client(request)
+    except pairing.ClientMismatch as e:
+        raise _client_mismatch(e)
     return {"versions": await queries.list_versions(await dbpool.pool())}
 
 
 @app.get("/api/export", dependencies=[Depends(require_sync_key)])
-async def api_export(version: int | None = Query(default=None)) -> Response:
+async def api_export(request: Request, version: int | None = Query(default=None)) -> Response:
+    try:
+        await _guard_client(request)
+    except pairing.ClientMismatch as e:
+        raise _client_mismatch(e)
     snap = await queries.export_snapshot(await dbpool.pool(), version)
     if snap is None:
         raise HTTPException(status_code=404, detail="版本不存在")
@@ -154,6 +186,28 @@ async def api_export(version: int | None = Query(default=None)) -> Response:
         content=json.dumps(snap, ensure_ascii=False),
         media_type="application/json; charset=utf-8",
     )
+
+
+class _PairBody(BaseModel):
+    """显式配对请求（保存服务器配置时探测）。"""
+    clientId: str
+
+
+@app.post("/api/pair", dependencies=[Depends(require_sync_key)])
+async def api_pair(body: _PairBody) -> dict:
+    """配对探测：未配对则抢占；已是本设备也成功；被其他设备占用 409。"""
+    if not pairing.valid_client_id(body.clientId):
+        raise HTTPException(status_code=400, detail="clientId 格式非法")
+    if not await pairing.pair(await dbpool.pool(), body.clientId):
+        raise _client_mismatch(pairing.ClientMismatch())
+    return {"paired": True}
+
+
+@app.post("/api/unpair", dependencies=[Depends(require_sync_key)])
+async def api_unpair() -> dict:
+    """解除配对（App「接管此服务器」/ 重装救急）。READ_KEY 无权调用。"""
+    await pairing.unpair(await dbpool.pool())
+    return {"unpaired": True}
 
 
 @app.get("/api/meta", dependencies=[Depends(require_read_key)])

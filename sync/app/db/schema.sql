@@ -39,3 +39,24 @@ CREATE TABLE IF NOT EXISTS mirror_categories (
     updated_at_ms BIGINT NOT NULL,
     is_deleted    BOOLEAN NOT NULL
 );
+
+-- 客户端配对：单行表（CHECK id=1），先到先得，记录唯一被允许的同步设备身份。
+-- needs_merge：新抢占（换机/接管）后为 TRUE，首次推送与镜像做并集合并，
+-- 客户端收敛（回拉全量）后转正常整本替换。READ_KEY 只读通道不参与配对。
+CREATE TABLE IF NOT EXISTS client_pairing (
+    id          INT PRIMARY KEY CHECK (id = 1),
+    client_id   TEXT NOT NULL,
+    needs_merge BOOLEAN NOT NULL DEFAULT FALSE,
+    paired_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 旧库升级：PG 不支持 ADD COLUMN IF NOT EXISTS，用 DO 块补列（幂等）
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'client_pairing'
+                     AND column_name = 'needs_merge') THEN
+        ALTER TABLE client_pairing
+            ADD COLUMN needs_merge BOOLEAN NOT NULL DEFAULT FALSE;
+    END IF;
+END $$;
