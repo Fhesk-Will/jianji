@@ -34,9 +34,14 @@ keystore.properties
 # ---- 本地发布脚本（仅本机使用，不入库）----
 scripts/
 
-# ---- jianji-sync（Python 子项目）----
-jianji-sync/.env
-jianji-sync/.venv/
-jianji-sync/.pytest_cache/
+# ---- AGENTS/CLAUDE（各工具本地协作说明，不入库）----
+AGENTS.md
+CLAUDE.md
+
+# ---- sync（Python 子项目，仅服务实现入库）----
+sync/.env
+sync/.venv/
+sync/.pytest_cache/
+sync/tests/
 __pycache__/
 *.pyc

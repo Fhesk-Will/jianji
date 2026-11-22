@@ -1,16 +1,16 @@
-# jianji-sync
+# sync · 简记云端同步服务
 
-简记录账 App（jianji 仓库根目录的 Android 工程）的云端镜像 + AI 只读查询服务。同仓子项目，部署独立。
+简记录账 App（jianji 仓库根目录的 Android 工程）的云端镜像 + AI 只读查询服务。同仓子项目，目录 `sync/`，部署独立。
 
 - **备份**：接收 App 推送的全量快照（SnapshotV1），落 PostgreSQL，带版本历史、误删熔断、滚动保留
 - **AI 只读查询**：HTTP + MCP 接口，服务端算好数字，AI 只引用不计算
 
-设计文档见 `docs/`（服务器端需求与架构 / APP端需求与修改 / 实施计划）。
+接口契约、指纹规则与熔断协议以 `app/` 下的实现为准（`canonical.py` / `validate.py` / `sync.py`）。
 
 ## 本地开发
 
 ```bash
-cd jianji-sync            # 仓库内子目录
+cd sync                  # 仓库内子目录
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 pytest tests/ -q          # 纯函数层（指纹/金额/校验/鉴权），无需 PG

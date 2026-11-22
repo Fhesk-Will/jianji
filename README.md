@@ -66,7 +66,7 @@ gradlew.bat assembleRelease      # Windows
 
 ## 自建云同步与 AI 查询（可选）
 
-仓库里的 [`jianji-sync/`](jianji-sync/) 是配套的自部署服务：把账本备份到你自己的服务器（版本历史 + 误删熔断 + 滚动保留），并提供只读查询接口给 AI 助手用。App 默认关闭同步；想用时按 [`jianji-sync/README.md`](jianji-sync/README.md) 用 Docker 部署，再把服务器地址和密钥填进 App 即可，不需要写任何代码。
+仓库里的 [`sync/`](sync/) 是配套的自部署服务：把账本备份到你自己的服务器（版本历史 + 误删熔断 + 滚动保留），并提供只读查询接口给 AI 助手用。App 默认关闭同步；想用时按 [`sync/README.md`](sync/README.md) 用 Docker 部署，再把服务器地址和密钥填进 App 即可，不需要写任何代码。
 
 ## 许可证
 

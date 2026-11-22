@@ -1,5 +1,4 @@
--- jianji-sync schema（PG 16+）
--- 设计依据：docs/服务器端需求与架构.md §4
+-- 简记云端同步服务（sync/）schema（PG 16+）
 -- 幂等：CREATE IF NOT EXISTS，首次启动自动建表。
 
 -- 快照版本表：只追加，永不 UPDATE/DELETE（删除只来自保留策略）
