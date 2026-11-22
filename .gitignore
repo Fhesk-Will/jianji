@@ -31,9 +31,6 @@ keystore.properties
 # ---- 日志 ----
 *.log
 
-# ---- 本地发布脚本（仅本机使用，不入库）----
-scripts/
-
 # ---- AGENTS/CLAUDE（各工具本地协作说明，不入库）----
 AGENTS.md
 CLAUDE.md
@@ -41,7 +38,9 @@ CLAUDE.md
 # ---- sync（Python 子项目，仅服务实现入库）----
 sync/.env
 sync/.venv/
-sync/.pytest_cache/
-sync/tests/
+
+# ---- dev（本地开发规划、测试与测试缓存，不入库）----
+dev/
+
 __pycache__/
 *.pyc
