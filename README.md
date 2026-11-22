@@ -33,9 +33,9 @@ git clone https://github.com/Fhesk-Will/jianji.git
 cd jianji
 ```
 
-release 包必须签名。没有现成密钥库的话先生成一个（一次即可，之后务必妥善保管）：
+release 包必须签名。没有现成密钥库的话先生成一个（一次性工作，以后复用）：
 
-```bash
+```
 keytool -genkeypair -v -keystore jianji-release.jks -alias jianji \
   -keyalg RSA -keysize 2048 -validity 10000
 ```
@@ -58,11 +58,15 @@ gradlew.bat assembleRelease      # Windows
 
 产物在 `app/build/outputs/apk/release/jianji-v<版本>-<versionCode>.apk`，经 R8 裁剪后约 2 MB。版本号是「当天日期 + 当日序号」；作者本机的 `scripts/release.ps1` 会自动算出序号（当天已有版本 +1）再打包，不随仓库分发。直接在本仓库构建时，版本号用 `gradle.properties` 里的兜底值。
 
-发布包请用脚本生成：直接跑 `assembleRelease` 只更新 `app/build/outputs/` 里的文件，不会同步根目录的 APK 与 `SHA256SUMS.txt`。
+发布包请用脚本生成：直接跑 `assembleRelease` 只更新 `app/build/outputs/apk/` 里的文件，不会同步根目录的 APK 与 `SHA256SUMS.txt`。
 
 只想调试而不打包的话，用 Android Studio 打开本目录，等同步完成后点 Run 即可装到设备或模拟器上。
 
 `keystore.properties`、`*.jks` 与 `local.properties` 都是本机文件，已被 `.gitignore` 排除，不会进入仓库。
+
+## 自建云同步与 AI 查询（可选）
+
+仓库里的 [`jianji-sync/`](jianji-sync/) 是配套的自部署服务：把账本备份到你自己的服务器（版本历史 + 误删熔断 + 滚动保留），并提供只读查询接口给 AI 助手用。App 默认关闭同步；想用时按 [`jianji-sync/README.md`](jianji-sync/README.md) 用 Docker 部署，再把服务器地址和密钥填进 App 即可，不需要写任何代码。
 
 ## 许可证
 

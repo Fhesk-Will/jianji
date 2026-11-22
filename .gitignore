@@ -33,3 +33,10 @@ keystore.properties
 
 # ---- 本地发布脚本（仅本机使用，不入库）----
 scripts/
+
+# ---- jianji-sync（Python 子项目）----
+jianji-sync/.env
+jianji-sync/.venv/
+jianji-sync/.pytest_cache/
+__pycache__/
+*.pyc

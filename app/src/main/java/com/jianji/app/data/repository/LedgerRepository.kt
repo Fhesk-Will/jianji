@@ -147,16 +147,23 @@ class LedgerRepository(private val db: AppDatabase) {
         note: String,
     ) {
         val old = recordDao.byId(id) ?: return
-        recordDao.upsert(
-            old.copy(
-                type = type,
-                amountMinor = amountMinor,
-                categoryId = categoryId,
-                dateEpochDay = Dates.epochDay(date),
-                note = note.trim(),
-                updatedAtEpochMs = System.currentTimeMillis(),
-            ),
+        val next = old.copy(
+            type = type,
+            amountMinor = amountMinor,
+            categoryId = categoryId,
+            dateEpochDay = Dates.epochDay(date),
+            note = note.trim(),
+            updatedAtEpochMs = System.currentTimeMillis(),
         )
+        // A1 守卫：语义字段无变化不落库——不顶起 updatedAt，Room 不发变更通知，
+        // 备份/小部件/同步下游全部安静（云同步 App 端文档 §2，第一层防线）。
+        if (next.type == old.type &&
+            next.amountMinor == old.amountMinor &&
+            next.categoryId == old.categoryId &&
+            next.dateEpochDay == old.dateEpochDay &&
+            next.note == old.note
+        ) return
+        recordDao.upsert(next)
     }
 
     suspend fun softDeleteRecord(id: String) =
@@ -182,8 +189,12 @@ class LedgerRepository(private val db: AppDatabase) {
         )
     }
 
-    suspend fun renameCategory(id: String, name: String, emoji: String) =
+    suspend fun renameCategory(id: String, name: String, emoji: String) {
+        val old = categoryDao.byId(id) ?: return
+        // A1 守卫：名字与图标都没变就不更新（不顶起 updatedAt，理由同 updateRecord）
+        if (old.name == name.trim() && old.emoji == emoji) return
         categoryDao.update(id, name.trim(), emoji, System.currentTimeMillis())
+    }
 
     suspend fun moveCategory(id: String, direction: Int) = categoryDao.move(id, direction)
 
