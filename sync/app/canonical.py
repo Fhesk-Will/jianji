@@ -2,7 +2,7 @@
 
 规则与《服务器端需求与架构.md》§3.2 严格一致，且与 App 端（Kotlin）实现逐字节对齐——
 这是双端去重的根基。任何一端修改规则，必须双端同提交并重新生成
-tests/fixtures/canonical_cases.json（golden fixture 是对答案的唯一裁判）。
+dev/tests/sync/fixtures/canonical_cases.json（golden fixture 是对答案的唯一裁判）。
 
 canonical 形式的精确定义（两端实现的共同契约）：
   1. records 按 id 升序（UTF-8 字节序；id 为 UUID/ASCII，两端排序等价），
