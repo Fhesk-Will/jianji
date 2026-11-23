@@ -28,8 +28,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,6 +60,7 @@ import com.jianji.app.data.sync.SyncServerUrl
 import com.jianji.app.data.sync.SyncStatus
 import com.jianji.app.data.sync.SyncVersion
 import com.jianji.app.data.sync.SyncVersionsOutcome
+import com.jianji.app.ui.components.AppSwitch
 import com.jianji.app.ui.theme.Ink
 import com.jianji.app.ui.theme.Sub
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -666,11 +665,7 @@ private fun SyncSwitchRow(
             Text(sub, fontSize = 11.sp, color = Sub)
         }
         Spacer(Modifier.weight(1f))
-        Switch(
-            checked = checked,
-            onCheckedChange = onToggle,
-            colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
-        )
+        AppSwitch(checked = checked, onCheckedChange = onToggle)
     }
 }
 

@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,7 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jianji.app.ui.theme.Faint
 import com.jianji.app.ui.theme.Ink
+import com.jianji.app.ui.theme.LineSoft
+import com.jianji.app.ui.theme.OnPrimary
+import com.jianji.app.ui.theme.Primary
 import com.jianji.app.ui.theme.Sub
 import com.jianji.app.util.Dates
 import java.time.YearMonth
@@ -147,4 +153,30 @@ fun EmojiBadge(
     ) {
         Text(emoji, fontSize = (size.value * 0.5f).sp)
     }
+}
+
+/**
+ * 统一开关：关闭态用「浅色轨道 + 描边 + 灰圆点」,
+ * 避免默认的灰底灰点在白卡片上像一块不可辨识的灰块。
+ * 应用锁 / 云同步等设置行一律用这个。
+ */
+@Composable
+fun AppSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = modifier,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = OnPrimary,
+            checkedTrackColor = Primary,
+            checkedBorderColor = Primary,
+            uncheckedThumbColor = Sub,
+            uncheckedTrackColor = LineSoft,
+            uncheckedBorderColor = Faint,
+        ),
+    )
 }

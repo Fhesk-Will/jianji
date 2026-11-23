@@ -31,8 +31,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +58,7 @@ import com.jianji.app.JianJiApp
 import com.jianji.app.data.csv.CsvManager
 import com.jianji.app.data.csv.XlsxTemplate
 import com.jianji.app.data.prefs.Settings
+import com.jianji.app.ui.components.AppSwitch
 import com.jianji.app.ui.theme.Ink
 import com.jianji.app.ui.theme.Sub
 import com.jianji.app.util.Dates
@@ -481,11 +480,7 @@ private fun SwitchRow(
             Text(sub, fontSize = 11.sp, color = Sub)
         }
         Spacer(Modifier.weight(1f))
-        Switch(
-            checked = checked,
-            onCheckedChange = onToggle,
-            colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
-        )
+        AppSwitch(checked = checked, onCheckedChange = onToggle)
     }
 }
 
