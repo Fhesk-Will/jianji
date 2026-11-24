@@ -355,6 +355,7 @@ fun SyncSettingsGroup() {
                 else -> "手动把账本备份到服务器"
             },
             enabled = !syncUi.running,
+            showArrow = false,
             onClick = {
                 if (settings.syncEnabled) vm.syncNow() else showConfig = true
             },
@@ -365,6 +366,7 @@ fun SyncSettingsGroup() {
             sub = syncStatusSub(configured, settings.syncEnabled, syncUi.running, syncStatus),
             enabled = configured && !syncUi.running &&
                 (syncStatus.failure != null || syncStatus.autoPaused),
+            showArrow = false,
             onClick = { vm.syncNow() },
         )
         SyncIconRow(
@@ -376,6 +378,7 @@ fun SyncSettingsGroup() {
                 else -> "浏览服务器版本，替换本地账本"
             },
             enabled = configured && !restoreRunning,
+            showArrow = false,
             onClick = {
                 showVersions = true
                 vm.loadVersions()
@@ -616,6 +619,7 @@ private fun SyncIconRow(
     title: String,
     sub: String,
     enabled: Boolean = true,
+    showArrow: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     Row(
@@ -637,7 +641,7 @@ private fun SyncIconRow(
             Text(sub, fontSize = 11.sp, color = Sub)
         }
         Spacer(Modifier.weight(1f))
-        if (onClick != null && enabled) {
+        if (onClick != null && enabled && showArrow) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
