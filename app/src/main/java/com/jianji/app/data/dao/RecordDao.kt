@@ -92,6 +92,54 @@ interface RecordDao {
         categoryIds: List<String>,
     ): Flow<List<RecordEntity>>
 
+    /** 明细页分块加载：按日期区间一次性读取（分类筛选版由 Repository 选择） */
+    @Query(
+        """
+        SELECT * FROM records
+        WHERE dateEpochDay BETWEEN :from AND :to
+          AND isDeleted = 0
+          AND (:type IS NULL OR type = :type)
+          AND (:keyword IS NULL OR note LIKE '%' || :keyword || '%')
+        ORDER BY dateEpochDay DESC, createdAtEpochMs DESC
+        """,
+    )
+    suspend fun recordsBetweenOnce(
+        from: Int,
+        to: Int,
+        type: RecordType?,
+        keyword: String?,
+    ): List<RecordEntity>
+
+    @Query(
+        """
+        SELECT * FROM records
+        WHERE dateEpochDay BETWEEN :from AND :to
+          AND isDeleted = 0
+          AND (:type IS NULL OR type = :type)
+          AND (:keyword IS NULL OR note LIKE '%' || :keyword || '%')
+          AND categoryId IN (:categoryIds)
+        ORDER BY dateEpochDay DESC, createdAtEpochMs DESC
+        """,
+    )
+    suspend fun recordsBetweenInCategoriesOnce(
+        from: Int,
+        to: Int,
+        type: RecordType?,
+        keyword: String?,
+        categoryIds: List<String>,
+    ): List<RecordEntity>
+
+    /** 全量记录的最早 / 最晚日期，用于明细页判断分块加载边界 */
+    @Query("SELECT MIN(dateEpochDay) FROM records WHERE isDeleted = 0")
+    suspend fun earliestEpochDay(): Int?
+
+    @Query("SELECT MAX(dateEpochDay) FROM records WHERE isDeleted = 0")
+    suspend fun latestEpochDay(): Int?
+
+    /** 记录表任意写入都会改变该值，用于明细页已加载分块的增量刷新 */
+    @Query("SELECT MAX(updatedAtEpochMs) FROM records")
+    fun lastChangeFlow(): Flow<Long?>
+
     @Query(
         "SELECT SUM(amountMinor) FROM records " +
             "WHERE dateEpochDay BETWEEN :from AND :to AND isDeleted = 0 AND type = :type",

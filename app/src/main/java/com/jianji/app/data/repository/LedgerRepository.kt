@@ -48,6 +48,43 @@ class LedgerRepository(private val db: AppDatabase) {
         }
     }
 
+    /**
+     * 明细页分块加载：按月份区间一次性读取过滤后的记录。
+     * categoryIds 为 null 表示不按分类过滤；空列表表示结果必然为空。
+     */
+    suspend fun recordsInRangeOnce(
+        from: YearMonth,
+        to: YearMonth,
+        type: RecordType?,
+        keyword: String?,
+        categoryIds: List<String>?,
+    ): List<RecordEntity> {
+        val (fromDay, _) = Dates.monthRange(from)
+        val (_, toDay) = Dates.monthRange(to)
+        val kw = keyword?.ifBlank { null }
+        return when {
+            categoryIds == null -> recordDao.recordsBetweenOnce(fromDay, toDay, type, kw)
+            categoryIds.isEmpty() -> emptyList()
+            else -> recordDao.recordsBetweenInCategoriesOnce(fromDay, toDay, type, kw, categoryIds)
+        }
+    }
+
+    suspend fun earliestRecordDay(): Int? = recordDao.earliestEpochDay()
+
+    suspend fun latestRecordDay(): Int? = recordDao.latestEpochDay()
+
+    /** 记录表变更信号：明细页据此刷新已加载分块，不必整体重载 */
+    fun lastRecordChangeFlow(): Flow<Long?> = recordDao.lastChangeFlow()
+
+    /** 本月合计（明细页顶部汇总卡，始终整月口径、不受筛选影响） */
+    fun monthTotalsFlow(month: YearMonth): Flow<Pair<Long, Long>> {
+        val (from, to) = Dates.monthRange(month)
+        return combine(
+            recordDao.sumBetween(from, to, RecordType.EXPENSE),
+            recordDao.sumBetween(from, to, RecordType.INCOME),
+        ) { expense, income -> (expense ?: 0L) to (income ?: 0L) }
+    }
+
     fun categoriesFlow(type: RecordType? = null): Flow<List<CategoryEntity>> =
         if (type == null) categoryDao.active() else categoryDao.byType(type)
 

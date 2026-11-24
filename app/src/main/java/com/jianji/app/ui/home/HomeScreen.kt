@@ -8,30 +8,35 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -46,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -55,15 +62,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jianji.app.JianJiApp
 import com.jianji.app.data.model.RecordType
 import com.jianji.app.ui.components.EmojiBadge
-import com.jianji.app.ui.components.MonthBar
 import com.jianji.app.ui.components.SegTabs
 import com.jianji.app.ui.theme.Accent
+import com.jianji.app.ui.theme.Faint
 import com.jianji.app.ui.theme.Income
 import com.jianji.app.ui.theme.Ink
 import com.jianji.app.ui.theme.Sub
 import com.jianji.app.util.Dates
 import com.jianji.app.util.Money
-import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.YearMonth
@@ -83,53 +90,89 @@ fun HomeScreen(
     var showFilter by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    // 新建保存后：先切到该记录所在月份，再把当天分组顶到列表最上方
+    // 新建保存后：确保目标年月已加载并展开，再把当天分组顶到列表上方
     LaunchedEffect(locateEpochDay) {
         val epochDay = locateEpochDay ?: return@LaunchedEffect
         val target = Dates.ofEpochDay(epochDay)
-        val targetMonth = YearMonth.from(target)
-        if (state.month != targetMonth) vm.setMonth(targetMonth)
-        // 切月后数据异步到达；等该日分组出现再定位，找不到（如被筛选隐藏）则回顶
-        val index = withTimeoutOrNull(1_000) {
-            snapshotFlow { state.sections.indexOfFirst { it.date == target } }
+        vm.ensureVisible(target)
+        // 数据异步到达；找不到该日（如被筛选隐藏）则回顶
+        val index = withTimeoutOrNull(2_000) {
+            snapshotFlow { state.items.indexOfFirst { it is HomeListItem.Day && it.section.date == target } }
                 .first { it >= 0 }
         }
         listState.scrollToItem(index ?: 0)
         onLocateConsumed()
     }
 
-    Column(Modifier.fillMaxSize()) {
-        MonthBar(
-            month = state.month,
-            onPick = vm::setMonth,
-            onPrev = vm::prevMonth,
-            onNext = vm::nextMonth,
-            trailing = {
-                IconButton(onClick = { showFilter = true }) {
-                    Icon(Icons.Filled.Search, contentDescription = "筛选")
-                }
-            },
-        )
+    // 筛选条件变化后回到列表顶部（仅条件真的变化时，避免页面重建时重置滚动位置）
+    var lastFilter by remember { mutableStateOf(state.filter) }
+    LaunchedEffect(state.filter) {
+        if (lastFilter != state.filter) {
+            lastFilter = state.filter
+            listState.scrollToItem(0)
+        }
+    }
 
-        // 本月汇总（始终整月口径）
+    // 接近底部时加载更早的月份
+    LaunchedEffect(listState, state.endReached) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            (info.visibleItemsInfo.lastOrNull()?.index ?: -1) to info.totalItemsCount
+        }
+            .distinctUntilChanged()
+            .collect { (last, total) ->
+                if (total > 0 && last >= total - 2) vm.loadMore()
+            }
+    }
+
+    // 当前区间没有记录但历史还没加载完：继续向后加载，避免空白页
+    LaunchedEffect(state.items.isEmpty(), state.endReached, state.loading, state.loadingMore) {
+        if (state.items.isEmpty() && !state.endReached && !state.loading && !state.loadingMore) {
+            vm.loadMore()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 6.dp, top = 2.dp),
+        ) {
+            Text("明细", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { showFilter = true }) {
+                Icon(Icons.Filled.Search, contentDescription = "筛选")
+            }
+        }
+
+        // 本月汇总（始终整月口径，不受筛选影响）
         Card(
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp),
         ) {
-            Row(Modifier.padding(vertical = 14.dp)) {
-                SummaryCell("支出", Money.yuan(state.monthExpenseMinor), Ink)
-                SummaryCell("收入", Money.yuan(state.monthIncomeMinor), Income)
-                SummaryCell("结余", Money.yuan(state.monthIncomeMinor - state.monthExpenseMinor), Ink)
+            Column(Modifier.padding(vertical = 12.dp)) {
+                Text(
+                    "本月",
+                    fontSize = 11.sp,
+                    color = Sub,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
+                )
+                Row {
+                    SummaryCell("支出", Money.yuan(state.monthExpenseMinor), Ink)
+                    SummaryCell("收入", Money.yuan(state.monthIncomeMinor), Income)
+                    SummaryCell("结余", Money.yuan(state.monthIncomeMinor - state.monthExpenseMinor), Ink)
+                }
             }
         }
 
         if (state.filter.active) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 16.dp, top = 8.dp),
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
             ) {
                 Text("已按条件筛选", fontSize = 12.sp, color = Sub)
                 TextButton(onClick = vm::clearFilter) { Text("清除") }
@@ -137,78 +180,53 @@ fun HomeScreen(
         }
 
         Box(Modifier.weight(1f)) {
-            if (state.sections.isEmpty() && !state.filter.active) {
-                EmptyMonth(onAdd)
-            } else {
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    state.sections.forEach { section ->
-                        item(key = "sec-${section.date}") {
-                            Card(
-                                shape = RoundedCornerShape(14.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 13.dp),
-                            ) {
-                                Column {
-                                    // 日头
-                                    Row(
-                                        Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
-                                    ) {
-                                        Text(
-                                            Dates.dayLabel(section.date),
-                                            fontSize = 12.sp,
-                                            color = Sub,
-                                            fontWeight = FontWeight.Medium,
-                                        )
-                                        Spacer(Modifier.weight(1f))
-                                        Text(
-                                            dayTotalLabel(section),
-                                            fontSize = 12.sp,
-                                            color = Sub,
-                                        )
-                                    }
-                                    section.rows.forEach { row ->
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable { onEdit(row.id) }
-                                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                                        ) {
-                                            EmojiBadge(row.emoji)
-                                            Column(
-                                                Modifier
-                                                    .weight(1f)
-                                                    .padding(start = 12.dp),
-                                            ) {
-                                                Text(row.categoryName, fontSize = 14.sp, color = Ink)
-                                                if (row.note.isNotBlank()) {
-                                                    Text(
-                                                        row.note,
-                                                        fontSize = 11.5.sp,
-                                                        color = Sub,
-                                                        maxLines = 1,
-                                                    )
-                                                }
-                                            }
-                                            Text(
-                                                Money.signed(row.amountMinor, row.isExpense),
-                                                fontSize = 15.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = if (row.isExpense) Ink else Income,
-                                            )
-                                        }
-                                    }
-                                }
+            when {
+                state.items.isEmpty() && state.loading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                }
+
+                state.items.isEmpty() && state.endReached -> {
+                    EmptyList(
+                        filterActive = state.filter.active,
+                        onAdd = onAdd,
+                        onClear = vm::clearFilter,
+                    )
+                }
+
+                state.items.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                }
+
+                else -> {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        items(state.items, key = ::itemKey) { item ->
+                            when (item) {
+                                is HomeListItem.YearHeader -> YearHeaderRow(
+                                    header = item,
+                                    onToggle = { vm.toggleYear(item.year) },
+                                )
+
+                                is HomeListItem.MonthHeader -> MonthHeaderRow(
+                                    header = item,
+                                    onToggle = { vm.toggleMonth(item.month) },
+                                )
+
+                                is HomeListItem.Day -> DayCard(item.section, onEdit)
                             }
+                        }
+                        if (state.loadingMore || !state.endReached) {
+                            item(key = "footer") { LoadingFooter(state.loadingMore) }
+                        } else {
+                            item(key = "end") { EndFooter() }
                         }
                     }
                 }
@@ -244,8 +262,159 @@ fun HomeScreen(
     }
 }
 
+private fun itemKey(item: HomeListItem): Any = when (item) {
+    is HomeListItem.YearHeader -> "y-${item.year}"
+    is HomeListItem.MonthHeader -> "m-${item.month}"
+    is HomeListItem.Day -> "d-${item.section.date}"
+}
+
 @Composable
-private fun RowScope.SummaryCell(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
+private fun YearHeaderRow(header: HomeListItem.YearHeader, onToggle: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+    ) {
+        Text("${header.year}年", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
+        Spacer(Modifier.weight(1f))
+        Icon(
+            if (header.expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = if (header.expanded) "收起" else "展开",
+            tint = Sub,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun MonthHeaderRow(header: HomeListItem.MonthHeader, onToggle: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(start = 30.dp, end = 20.dp, top = 4.dp, bottom = 4.dp),
+    ) {
+        Text(
+            "${header.month.monthValue}月",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Ink,
+        )
+        Spacer(Modifier.weight(1f))
+        val total = monthTotalLabel(header)
+        if (total.isNotEmpty()) {
+            Text(total, fontSize = 11.5.sp, color = Sub)
+            Spacer(Modifier.size(6.dp))
+        }
+        Icon(
+            if (header.expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = if (header.expanded) "收起" else "展开",
+            tint = Sub,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun DayCard(section: DaySection, onEdit: (String) -> Unit) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 13.dp),
+    ) {
+        Column {
+            // 日头
+            Row(
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
+            ) {
+                Text(
+                    Dates.dayLabel(section.date),
+                    fontSize = 12.sp,
+                    color = Sub,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    dayTotalLabel(section),
+                    fontSize = 12.sp,
+                    color = Sub,
+                )
+            }
+            section.rows.forEach { row ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEdit(row.id) }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    EmojiBadge(row.emoji)
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .padding(start = 12.dp),
+                    ) {
+                        Text(row.categoryName, fontSize = 14.sp, color = Ink)
+                        if (row.note.isNotBlank()) {
+                            Text(
+                                row.note,
+                                fontSize = 11.5.sp,
+                                color = Sub,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    Text(
+                        Money.signed(row.amountMinor, row.isExpense),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (row.isExpense) Ink else Income,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingFooter(loading: Boolean) {
+    Row(
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.size(8.dp))
+            Text("加载中…", fontSize = 12.sp, color = Sub)
+        } else {
+            Text("上滑加载更多", fontSize = 12.sp, color = Sub)
+        }
+    }
+}
+
+@Composable
+private fun EndFooter() {
+    Text(
+        "已经到底了",
+        fontSize = 12.sp,
+        color = Faint,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+    )
+}
+
+@Composable
+private fun RowScope.SummaryCell(label: String, value: String, color: Color) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.weight(1f),
@@ -265,18 +434,36 @@ private fun dayTotalLabel(s: DaySection): String {
     return sb.toString()
 }
 
+private fun monthTotalLabel(m: HomeListItem.MonthHeader): String {
+    val sb = StringBuilder()
+    if (m.expenseMinor > 0) sb.append("支出 ").append(Money.yuan(m.expenseMinor))
+    if (m.incomeMinor > 0) {
+        if (sb.isNotEmpty()) sb.append(" · ")
+        sb.append("收入 ").append(Money.yuan(m.incomeMinor))
+    }
+    return sb.toString()
+}
+
 @Composable
-private fun EmptyMonth(onAdd: () -> Unit) {
+private fun EmptyList(filterActive: Boolean, onAdd: () -> Unit, onClear: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.fillMaxSize().padding(bottom = 80.dp),
     ) {
-        Text("🧾", fontSize = 44.sp)
+        Text(if (filterActive) "🔍" else "🧾", fontSize = 44.sp)
         Spacer(Modifier.height(8.dp))
-        Text("本月还没有记录", fontSize = 14.sp, color = Sub)
+        Text(
+            if (filterActive) "没有符合条件的记录" else "还没有记录",
+            fontSize = 14.sp,
+            color = Sub,
+        )
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onAdd) { Text("记一笔") }
+        if (filterActive) {
+            Button(onClick = onClear) { Text("清除筛选") }
+        } else {
+            Button(onClick = onAdd) { Text("记一笔") }
+        }
     }
 }
 
@@ -386,9 +573,9 @@ private fun FilterSheet(state: HomeUiState, vm: HomeViewModel, onApply: () -> Un
             Button(onClick = onApply, modifier = Modifier.padding(start = 8.dp)) { Text("应用") }
         }
         Text(
-            "时间范围默认跟随当前月份（顶部切换）",
+            "筛选作用于全部历史记录",
             fontSize = 11.sp,
-            color = androidx.compose.ui.graphics.Color(0xFF93A1B5),
+            color = Color(0xFF93A1B5),
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
