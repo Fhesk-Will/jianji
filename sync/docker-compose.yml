@@ -1,3 +1,5 @@
+name: jianji-sync
+
 services:
   jianji-sync-app:
     build: .
@@ -31,3 +33,4 @@ services:
 
 volumes:
   jianji-sync-pgdata:
+    name: jianji-sync-pgdata

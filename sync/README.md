@@ -170,7 +170,22 @@ curl -fsS http://127.0.0.1:8100/healthz
 # 回滚：切回旧代码后重复上面两步；数据库卷不回滚
 ```
 
-升级前备份数据库卷：`docker run --rm -v jianji-sync-pgdata:/data -v $PWD:/backup alpine tar czf /backup/pgdata.tgz -C /data .`
+项目名与数据卷名已在 compose 中固定（`name: jianji-sync`、卷 `jianji-sync-pgdata`），不再随部署目录变化。**从旧版 compose（无 `name:`）升级时，实际卷名带旧项目前缀（如 `jianji-sync_jianji-sync-pgdata`），需先停机把数据拷到新卷，否则会挂上空库：**
+
+```bash
+cd /opt/jianji-sync
+docker rm -f jianji-sync-app jianji-sync-db
+old=$(docker volume ls -q | grep '_jianji-sync-pgdata$')
+echo "$old"   # 必须先确认只匹配到一个旧卷，否则手动指定
+docker volume create jianji-sync-pgdata
+docker run --rm -v "$old":/from -v jianji-sync-pgdata:/to alpine \
+  sh -c "cd /from && tar cf - . | (cd /to && tar xf -)"
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8100/healthz
+# 核对版本数、明细数正常后再删旧卷：docker volume rm "$old"
+```
+
+全新部署可忽略本节。升级前备份数据库卷：`docker run --rm -v jianji-sync-pgdata:/data -v $PWD:/backup alpine tar czf /backup/pgdata.tgz -C /data .`
 
 定期做恢复演练（验证备份真的可用；会重建数据卷，演练环境执行）：
 
