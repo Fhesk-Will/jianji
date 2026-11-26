@@ -1,4 +1,4 @@
-name: jianji-sync
+name: ${COMPOSE_PROJECT_NAME:-jianji-sync}
 
 services:
   app:
@@ -13,7 +13,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8100:8000"   # 只绑本机，由 Nginx 反代暴露 HTTPS
+      - "127.0.0.1:${SYNC_PORT:-8100}:8000"   # 只绑本机，由 Nginx 反代暴露 HTTPS
 
   db:
     image: postgres:16-alpine
@@ -32,4 +32,4 @@ services:
 
 volumes:
   jianji-sync-pgdata:
-    name: jianji-sync-pgdata
+    name: ${COMPOSE_PROJECT_NAME:-jianji-sync}-pgdata

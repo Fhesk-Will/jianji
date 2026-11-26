@@ -115,9 +115,18 @@ done
 # 预期 {"ok": true}
 ```
 
-应用只绑定 `127.0.0.1:8100`，数据库不对外；容器 `restart: unless-stopped`，数据在卷 `jianji-sync-pgdata`。
+应用只绑定 `127.0.0.1:${SYNC_PORT:-8100}`（默认 8100），数据库不对外；容器 `restart: unless-stopped`，数据在卷 `jianji-sync-pgdata`。
 
-镜像名由 compose 变量控制，默认 `jianji-sync-app:local`。需要按版本追溯或回滚时，构建时注入 tag（旧 tag 镜像保留在本地即可按版本回滚）：
+compose 支持以下环境变量覆盖，可写入 `.env` 或调用时传入：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | `jianji-sync` | 项目名与数据卷前缀，同机多实例时必须改 |
+| `SYNC_PORT` | `8100` | 宿主监听端口，冲突时修改（容器内仍是 8000，无需改） |
+| `IMAGE_REPO` | `jianji-sync-app` | 镜像名/仓库前缀 |
+| `IMAGE_TAG` | `local` | 镜像标签，需要版本追溯时注入 |
+
+镜像默认 `jianji-sync-app:local`。需要按版本追溯或回滚时，构建时注入 tag（旧 tag 镜像保留在本地即可按版本回滚）：
 
 ```bash
 IMAGE_TAG=$(git rev-parse --short HEAD) docker compose up -d --build
@@ -125,9 +134,15 @@ IMAGE_TAG=$(git rev-parse --short HEAD) docker compose up -d --build
 
 推送到镜像仓库时用 `IMAGE_REPO` 覆盖前缀（如 `IMAGE_REPO=registry.example.com/jianji-sync`）。
 
+同机部署第二套实例时，同时改项目名和端口即可隔离（数据卷自动变为 `jianji-sync-b-pgdata`）：
+
+```bash
+COMPOSE_PROJECT_NAME=jianji-sync-b SYNC_PORT=8200 docker compose up -d --build
+```
+
 ### 3. 反代暴露 HTTPS
 
-App 端只允许 HTTPS。在现有反代（Caddy 或 Nginx）加一条规则，示例用 `/jianji/` 前缀：
+App 端只允许 HTTPS。在现有反代（Caddy 或 Nginx）加一条规则，示例用 `/jianji/` 前缀（改过 `SYNC_PORT` 时，下面的目标端口同步替换）：
 
 ```caddy
 # Caddyfile
@@ -189,7 +204,7 @@ curl -fsS http://127.0.0.1:8100/healthz
 # 回滚：切回旧代码后重复上面的流程；数据库卷不回滚
 ```
 
-项目名与数据卷名已在 compose 中固定（`name: jianji-sync`、卷 `jianji-sync-pgdata`），不再随部署目录变化。**从旧版 compose（无 `name:`）升级时，实际卷名带旧项目前缀（如 `jianji-sync_jianji-sync-pgdata`），需先停机把数据拷到新卷，否则会挂上空库：**
+项目名与数据卷名默认为 `jianji-sync` / `jianji-sync-pgdata`，不随部署目录变化；可用 `COMPOSE_PROJECT_NAME` 覆盖，卷名会同步带上该项目名前缀。**从旧版 compose（无 `name:`）升级时，实际卷名带旧项目前缀（如 `jianji-sync_jianji-sync-pgdata`），需先停机把数据拷到新卷，否则会挂上空库：**
 
 ```bash
 cd /opt/jianji-sync
