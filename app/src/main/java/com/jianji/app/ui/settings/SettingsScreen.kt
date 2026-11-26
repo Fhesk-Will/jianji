@@ -276,7 +276,7 @@ fun SettingsScreen(
             SwitchRow(
                 icon = Icons.Filled.Lock,
                 title = "应用锁",
-                sub = "进入 App 需指纹或 PIN（回到前台同样需验证）",
+                sub = "启动或回到前台需验证指纹 / PIN",
                 checked = settings.appLock,
                 onToggle = vm::setAppLock,
             )
