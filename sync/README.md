@@ -117,6 +117,14 @@ done
 
 应用只绑定 `127.0.0.1:8100`，数据库不对外；容器 `restart: unless-stopped`，数据在卷 `jianji-sync-pgdata`。
 
+镜像名由 compose 变量控制，默认 `jianji-sync-app:local`。需要按版本追溯或回滚时，构建时注入 tag（旧 tag 镜像保留在本地即可按版本回滚）：
+
+```bash
+IMAGE_TAG=$(git rev-parse --short HEAD) docker compose up -d --build
+```
+
+推送到镜像仓库时用 `IMAGE_REPO` 覆盖前缀（如 `IMAGE_REPO=registry.example.com/jianji-sync`）。
+
 ### 3. 反代暴露 HTTPS
 
 App 端只允许 HTTPS。在现有反代（Caddy 或 Nginx）加一条规则，示例用 `/jianji/` 前缀：
@@ -147,7 +155,7 @@ location /jianji/ {
 ```bash
 cd /opt/jianji-sync
 set -a && . ./.env && set +a
-img=$(docker compose images -q jianji-sync-app)
+img=$(docker compose images -q app)
 
 # 服务端单元测试
 docker run --rm -v /opt/jianji-sync-tests:/t:ro -w /t "$img" python -m pytest /t -q
@@ -175,16 +183,17 @@ curl -fsS -X POST https://<域名>/jianji/api/unpair \
 
 ```bash
 git pull                       # 或重新上传 sync/
-docker compose up -d --build   # 重新构建并滚动重启
+docker compose down            # 首次从旧服务名升级时清理旧容器，避免残留容器占用 8100 端口
+docker compose up -d --build   # 重新构建并重启
 curl -fsS http://127.0.0.1:8100/healthz
-# 回滚：切回旧代码后重复上面两步；数据库卷不回滚
+# 回滚：切回旧代码后重复上面的流程；数据库卷不回滚
 ```
 
 项目名与数据卷名已在 compose 中固定（`name: jianji-sync`、卷 `jianji-sync-pgdata`），不再随部署目录变化。**从旧版 compose（无 `name:`）升级时，实际卷名带旧项目前缀（如 `jianji-sync_jianji-sync-pgdata`），需先停机把数据拷到新卷，否则会挂上空库：**
 
 ```bash
 cd /opt/jianji-sync
-docker rm -f jianji-sync-app jianji-sync-db
+docker rm -f jianji-sync-app jianji-sync-db   # 旧版容器名；新版为 jianji-sync-app-1 / jianji-sync-db-1
 old=$(docker volume ls -q | grep '_jianji-sync-pgdata$')
 echo "$old"   # 必须先确认只匹配到一个旧卷，否则手动指定
 docker volume create jianji-sync-pgdata

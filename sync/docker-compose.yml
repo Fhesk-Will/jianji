@@ -1,23 +1,22 @@
 name: jianji-sync
 
 services:
-  jianji-sync-app:
+  app:
+    image: ${IMAGE_REPO:-jianji-sync-app}:${IMAGE_TAG:-local}
     build: .
-    container_name: jianji-sync-app
     restart: unless-stopped
     environment:
       - SYNC_KEY=${SYNC_KEY}
       - READ_KEY=${READ_KEY}
-      - DATABASE_URL=postgres://jianji:${POSTGRES_PASSWORD}@jianji-sync-db:5432/jianji
+      - DATABASE_URL=postgres://jianji:${POSTGRES_PASSWORD}@db:5432/jianji
     depends_on:
-      jianji-sync-db:
+      db:
         condition: service_healthy
     ports:
       - "127.0.0.1:8100:8000"   # 只绑本机，由 Nginx 反代暴露 HTTPS
 
-  jianji-sync-db:
+  db:
     image: postgres:16-alpine
-    container_name: jianji-sync-db
     restart: unless-stopped
     environment:
       - POSTGRES_USER=jianji
