@@ -475,11 +475,10 @@ private fun SwitchRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         IconBox(icon)
-        Column(Modifier.padding(start = 12.dp)) {
+        Column(Modifier.padding(start = 12.dp).weight(1f)) {
             Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Text(sub, fontSize = 11.sp, color = Sub)
         }
-        Spacer(Modifier.weight(1f))
         AppSwitch(checked = checked, onCheckedChange = onToggle)
     }
 }
