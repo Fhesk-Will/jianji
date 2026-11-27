@@ -9,6 +9,7 @@ import com.jianji.app.data.repository.LedgerRepository
 import com.jianji.app.data.sync.CloudSyncManager
 import com.jianji.app.data.sync.SnapshotCodec
 import com.jianji.app.data.sync.SyncApiClient
+import com.jianji.app.data.update.UpdateManager
 import com.jianji.app.widget.QuickWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,7 @@ class AppContainer(context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val sync = CloudSyncManager(repo, settings, SyncApiClient(), scope)
     val csv = CsvManager(appContext, repo)
+    val update = UpdateManager(appContext)
 
     init {
         observeForAutoSync()

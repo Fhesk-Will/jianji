@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -58,6 +59,8 @@ import com.jianji.app.JianJiApp
 import com.jianji.app.data.csv.CsvManager
 import com.jianji.app.data.csv.XlsxTemplate
 import com.jianji.app.data.prefs.Settings
+import com.jianji.app.data.update.AppRelease
+import com.jianji.app.data.update.UpdateCheck
 import com.jianji.app.ui.components.AppSwitch
 import com.jianji.app.ui.theme.Ink
 import com.jianji.app.ui.theme.Sub
@@ -72,8 +75,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDate
+import java.util.Locale
 
 data class ShareRequest(val uri: Uri, val mimeType: String, val title: String)
+
+/** 应用内更新界面状态；下载完成后交由系统安装器接管。 */
+sealed interface UpdateUiState {
+    data object Idle : UpdateUiState
+    data object Checking : UpdateUiState
+    data object UpToDate : UpdateUiState
+    data class Available(val release: AppRelease) : UpdateUiState
+    data class Downloading(val release: AppRelease, val progress: Int) : UpdateUiState
+    data class Ready(val release: AppRelease, val file: File) : UpdateUiState
+    data class NeedInstallPermission(val release: AppRelease, val file: File) : UpdateUiState
+    data class Failed(val message: String) : UpdateUiState
+}
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -85,6 +101,77 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _shareRequest = MutableStateFlow<ShareRequest?>(null)
     val shareRequest: StateFlow<ShareRequest?> = _shareRequest.asStateFlow()
+
+    private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
+
+    /** 进入设置页时静默检查一次；已有结果或正在下载时不重复请求 */
+    fun autoCheckUpdate() {
+        when (_updateState.value) {
+            UpdateUiState.Idle, is UpdateUiState.Failed -> checkUpdate(silent = true)
+            else -> Unit
+        }
+    }
+
+    fun checkUpdate(silent: Boolean = false) {
+        val state = _updateState.value
+        if (state is UpdateUiState.Checking || state is UpdateUiState.Downloading) return
+        _updateState.value = UpdateUiState.Checking
+        viewModelScope.launch {
+            when (val result = container.update.check()) {
+                UpdateCheck.UpToDate -> _updateState.value = UpdateUiState.UpToDate
+                is UpdateCheck.Available -> _updateState.value = UpdateUiState.Available(result.release)
+                is UpdateCheck.Failed -> {
+                    _updateState.value = UpdateUiState.Failed(result.message)
+                    if (!silent) _msg.value = "检查更新失败：${result.message}"
+                }
+            }
+        }
+    }
+
+    fun downloadUpdate(release: AppRelease) {
+        if (_updateState.value is UpdateUiState.Downloading) return
+        _updateState.value = UpdateUiState.Downloading(release, 0)
+        viewModelScope.launch {
+            container.update.download(release) { percent ->
+                val state = _updateState.value
+                if (state is UpdateUiState.Downloading) {
+                    _updateState.value = state.copy(progress = percent)
+                }
+            }.onSuccess { file ->
+                if (container.update.canInstallPackages()) {
+                    _updateState.value = UpdateUiState.Ready(release, file)
+                    installUpdate(file)
+                } else {
+                    _updateState.value = UpdateUiState.NeedInstallPermission(release, file)
+                    _msg.value = "请允许简记安装未知应用后重试"
+                }
+            }.onFailure { e ->
+                _updateState.value = UpdateUiState.Failed(e.message ?: "下载失败")
+                _msg.value = "下载失败：${e.message ?: "请稍后重试"}"
+            }
+        }
+    }
+
+    fun installUpdate(file: File) {
+        container.update.install(file).onFailure {
+            Log.w("SettingsScreen", "无法打开系统安装器", it)
+            _msg.value = "无法打开系统安装器"
+        }
+    }
+
+    /** 已是待安装状态：已授权就直接安装，未授权先跳授权页 */
+    fun retryInstall() {
+        val state = _updateState.value as? UpdateUiState.NeedInstallPermission ?: return
+        if (container.update.canInstallPackages()) {
+            _updateState.value = UpdateUiState.Ready(state.release, state.file)
+            installUpdate(state.file)
+        } else {
+            container.update.openInstallPermission().onFailure {
+                _msg.value = "无法打开安装权限设置"
+            }
+        }
+    }
 
     fun setAppLock(v: Boolean) {
         viewModelScope.launch { container.settings.setAppLock(v) }
@@ -202,6 +289,10 @@ fun SettingsScreen(
     val settings by vm.ui.collectAsStateWithLifecycle()
     val msg by vm.msg.collectAsStateWithLifecycle()
     val shareRequest by vm.shareRequest.collectAsStateWithLifecycle()
+    val updateState by vm.updateState.collectAsStateWithLifecycle()
+
+    // 进入设置页静默检查一次新版本，结果只体现在「检查更新」副标题上
+    LaunchedEffect(Unit) { vm.autoCheckUpdate() }
 
     LaunchedEffect(msg) {
         msg?.let {
@@ -232,6 +323,7 @@ fun SettingsScreen(
     var exportStart by remember { mutableStateOf(LocalDate.now().minusYears(1)) }
     var exportEnd by remember { mutableStateOf(LocalDate.now()) }
     var showImportHelp by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
     var externalFileName by remember { mutableStateOf("所选文件") }
 
     LaunchedEffect(incomingImportUri) {
@@ -289,7 +381,59 @@ fun SettingsScreen(
                 sub = "${BuildConfig.VERSION_NAME} · 本地优先 · 云同步可选",
                 onClick = null,
             )
+            IconRow(
+                icon = Icons.Filled.SystemUpdate,
+                title = "检查更新",
+                sub = updateSubtitle(updateState),
+                onClick = {
+                    when (val state = updateState) {
+                        is UpdateUiState.Available -> showUpdateDialog = true
+                        is UpdateUiState.Ready -> vm.installUpdate(state.file)
+                        is UpdateUiState.NeedInstallPermission -> vm.retryInstall()
+                        is UpdateUiState.Checking, is UpdateUiState.Downloading -> Unit
+                        else -> vm.checkUpdate()
+                    }
+                },
+            )
         }
+    }
+
+    val availableUpdate = updateState as? UpdateUiState.Available
+    if (showUpdateDialog && availableUpdate != null) {
+        AlertDialog(
+            onDismissRequest = { showUpdateDialog = false },
+            title = { Text("发现新版本 ${availableUpdate.release.versionName}") },
+            text = {
+                Column {
+                    Text(
+                        "当前版本 ${BuildConfig.VERSION_NAME}",
+                        fontSize = 13.sp,
+                        color = Ink,
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        buildString {
+                            append("下载完成后会打开系统安装界面，确认安装即可完成更新。")
+                            formatApkSize(availableUpdate.release.apkSize)?.let {
+                                append("\n安装包大小 $it")
+                            }
+                        },
+                        fontSize = 13.sp,
+                        color = Sub,
+                        lineHeight = 21.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUpdateDialog = false
+                    vm.downloadUpdate(availableUpdate.release)
+                }) { Text("下载并安装") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUpdateDialog = false }) { Text("稍后") }
+            },
+        )
     }
 
     if (showExportDialog) {
@@ -413,6 +557,20 @@ fun SettingsScreen(
     }
 }
 
+private fun updateSubtitle(state: UpdateUiState): String = when (state) {
+    UpdateUiState.Idle -> "点击检查新版本"
+    UpdateUiState.Checking -> "正在检查新版本…"
+    UpdateUiState.UpToDate -> "已是最新版本"
+    is UpdateUiState.Available -> "发现新版本 ${state.release.versionName}，点击更新"
+    is UpdateUiState.Downloading -> "正在下载新版本 ${state.progress}%"
+    is UpdateUiState.Ready -> "新版本 ${state.release.versionName} 已下载，点击安装"
+    is UpdateUiState.NeedInstallPermission -> "需允许「安装未知应用」后安装"
+    is UpdateUiState.Failed -> "检查失败，点击重试"
+}
+
+private fun formatApkSize(bytes: Long): String? =
+    if (bytes <= 0) null else String.format(Locale.ROOT, "%.1f MB", bytes / 1024.0 / 1024.0)
+
 @Composable
 private fun GroupCard(title: String, content: @Composable () -> Unit) {
     Column(Modifier.padding(horizontal = 13.dp)) {
@@ -447,11 +605,10 @@ private fun IconRow(
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         IconBox(icon)
-        Column(Modifier.padding(start = 12.dp)) {
+        Column(Modifier.padding(start = 12.dp).weight(1f)) {
             Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Text(sub, fontSize = 11.sp, color = Sub)
         }
-        Spacer(Modifier.weight(1f))
         if (onClick != null) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,

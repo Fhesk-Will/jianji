@@ -3,6 +3,8 @@
 
     <!-- 云同步需要访问网络；公网 HTTP 仍会被 SyncServerUrl 拒绝，仅允许 localhost / 内网调试。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 应用内更新：下载完成后调起系统安装器，安装动作仍需用户确认 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".JianJiApp"
